@@ -1,6 +1,6 @@
 <img src="icons/diago-text.png" width="300" alt="DIAGO">
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/emiago/diago)](https://goreportcard.com/report/github.com/emiago/diago)
+[![Go Report Card](https://goreportcard.com/badge/github.com/c2pc/diago)](https://goreportcard.com/report/github.com/c2pc/diago)
 ![Coverage](https://img.shields.io/badge/coverage-61.1%25-blue)
 ![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/emiago/diago)
 
@@ -18,7 +18,7 @@ Quick links:
 - [Getting started](https://emiago.github.io/diago/docs/getting_started/)
 - [Demo Examples](https://emiago.github.io/diago/docs/examples/)
 - [API Docs](https://emiago.github.io/diago/docs/api_docs/)
-- [GO Docs](https://pkg.go.dev/github.com/emiago/diago)
+- [GO Docs](https://pkg.go.dev/github.com/c2pc/diago)
 - [Roadmap](https://emiago.github.io/diago/docs/#core-roadmap)
 
 *If you find this project useful and you want to support/sponzor or need help with your projects, you can contact me more on*
@@ -27,7 +27,7 @@ Quick links:
 Follow me on [X/Twitter](https://twitter.com/emiago123) for regular updates
 
 **Tools/Service developed with diago:**
-- <img width="20" src="https://github.com/emiago/diagox/raw/main/images/diagox-icon-blue.png"> [github.com/emiago/diagox](https://github.com/emiago/diagox) simple Ingress/Egress and Registrar for SIP/RTP scaling
+- <img width="20" src="https://github.com/c2pc/diagox/raw/main/images/diagox-icon-blue.png"> [github.com/c2pc/diagox](https://github.com/c2pc/diagox) simple Ingress/Egress and Registrar for SIP/RTP scaling
 - <img width="20" src="https://github.com/emiago/gophone/raw/main/images/g2.png"> [github.com/emiago/gophone](https://github.com/emiago/gophone) CLI softphone for easy testing 
 
 ## RFCS

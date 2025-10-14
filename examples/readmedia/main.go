@@ -12,10 +12,10 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/emiago/diago"
-	"github.com/emiago/diago/audio"
-	"github.com/emiago/diago/examples"
-	"github.com/emiago/diago/media"
+	"github.com/c2pc/diago"
+	"github.com/c2pc/diago/audio"
+	"github.com/c2pc/diago/examples"
+	"github.com/c2pc/diago/media"
 	"github.com/emiago/sipgo"
 )
 

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emiago/diago/media"
+	"github.com/c2pc/diago/media"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )

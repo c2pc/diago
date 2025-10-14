@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emiago/diago/audio"
-	"github.com/emiago/diago/media"
-	"github.com/emiago/diago/media/sdp"
+	"github.com/c2pc/diago/audio"
+	"github.com/c2pc/diago/media"
+	"github.com/c2pc/diago/media/sdp"
 	"github.com/emiago/sipgo/sip"
 )
 
@@ -233,10 +233,11 @@ func (d *DialogMedia) checkEarlyMedia(remoteSDP []byte) error {
 }
 
 func (d *DialogMedia) sdpUpdateUnsafe(sdp []byte) error {
-	fmt.Println(len(sdp))
-	if len(sdp) == 0 {
+	fmt.Println("SDPDDPDPPDPD", len(sdp))
+	if sdp == nil {
 		return nil
-	}	
+	}
+
 	msess := d.mediaSession.Fork()
 	if err := msess.RemoteSDP(sdp); err != nil {
 		return fmt.Errorf("sdp update media remote SDP applying failed: %w", err)

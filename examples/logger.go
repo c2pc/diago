@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/emiago/diago/media"
+	"github.com/c2pc/diago/media"
 	"github.com/emiago/sipgo/sip"
 )
 

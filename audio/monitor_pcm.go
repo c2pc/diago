@@ -9,7 +9,7 @@ import (
 	"path"
 	"time"
 
-	"github.com/emiago/diago/media"
+	"github.com/c2pc/diago/media"
 	"github.com/google/uuid"
 )
 
