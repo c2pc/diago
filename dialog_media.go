@@ -233,8 +233,12 @@ func (d *DialogMedia) checkEarlyMedia(remoteSDP []byte) error {
 }
 
 func (d *DialogMedia) sdpUpdateUnsafe(sdp []byte) error {
+	fmt.Println(len(sdp))
+	if len(sdp) == 0 {
+		return nil
+	}	
 	msess := d.mediaSession.Fork()
-	if err := msess.RemoteSDP(sdp); err != nil && len(sdp) > 0 {
+	if err := msess.RemoteSDP(sdp); err != nil {
 		return fmt.Errorf("sdp update media remote SDP applying failed: %w", err)
 	}
 
