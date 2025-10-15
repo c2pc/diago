@@ -233,7 +233,6 @@ func (d *DialogMedia) checkEarlyMedia(remoteSDP []byte) error {
 }
 
 func (d *DialogMedia) sdpUpdateUnsafe(sdp []byte) error {
-	fmt.Println("SDPDDPDPPDPD", len(sdp))
 	if sdp == nil {
 		return nil
 	}
