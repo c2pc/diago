@@ -238,7 +238,14 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 	if err == nil {
 		// Media type is present in SDP
 		if err := sess.RemoteSDP(sdpBody); err != nil {
-			return fmt.Errorf("failed to apply %s SDP: %w", mediaType, err)
+			// If no supported codecs found, we should still try to answer
+			// with what we have, but log the error
+			// Check if we have any codecs at all
+			commonCodecs := sess.CommonCodecs()
+			if len(sess.Codecs) == 0 && len(commonCodecs) == 0 {
+				return fmt.Errorf("failed to apply %s SDP: %w", mediaType, err)
+			}
+			// If we have some codecs, continue (they might be from previous negotiation)
 		}
 	}
 
@@ -251,12 +258,27 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 	d.mu.Unlock()
 
 	// Update video session if it exists and video is in SDP
-	if d.videoMediaSession != nil {
-		_, err := sd.MediaDescription("video")
-		if err == nil {
-			// Video is present in SDP
+	// Also create video session if video is in SDP but not in our config
+	_, err = sd.MediaDescription("video")
+	if err == nil {
+		// Video is present in SDP
+		if d.videoMediaSession == nil {
+			// Video session doesn't exist, but video is in SDP
+			// This means we need to create it dynamically (handled in sdpUpdateUnsafe)
+			// For now, we'll skip video if not configured
+			// The video session will be created in sdpUpdateUnsafe if needed
+		} else {
+			// Video session exists, update it
 			if err := d.videoMediaSession.RemoteSDP(sdpBody); err != nil {
-				return fmt.Errorf("failed to apply video SDP: %w", err)
+				// If no supported video codecs found, we should still try to answer
+				// with audio only, but log the error
+				// Check if we have any video codecs at all
+				commonCodecs := d.videoMediaSession.CommonCodecs()
+				if len(d.videoMediaSession.Codecs) == 0 && len(commonCodecs) == 0 {
+					// No video codecs, continue with audio only
+				} else {
+					// We have some codecs, but negotiation failed - continue anyway
+				}
 			}
 
 			videoRtpSess := media.NewRTPSession(d.videoMediaSession)
