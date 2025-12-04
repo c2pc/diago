@@ -880,8 +880,10 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d profile-level-id=42e01f;packetization-mode=1", f.PayloadType))
 			case "VP8":
 				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d VP8/90000", f.PayloadType))
+				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d max-fr=30;max-fs=580", f.PayloadType))
 			case "VP9":
 				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d VP9/90000", f.PayloadType))
+				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d max-fr=30;max-fs=580", f.PayloadType))
 			default:
 				// Generic format for unknown video codecs
 				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d %s/90000", f.PayloadType, f.Name))
@@ -899,11 +901,22 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 				// https://datatracker.ietf.org/doc/html/rfc7587
 				formatsMap = append(formatsMap, "a=fmtp:96 useinbandfec=0")
 			case CodecTelephoneEvent8000.PayloadType:
-				formatsMap = append(formatsMap, "a=rtpmap:101 telephone-event/8000")
-				formatsMap = append(formatsMap, "a=fmtp:101 0-16")
+				// Use actual PayloadType from codec (can be 101, 120, etc.)
+				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d telephone-event/8000", f.PayloadType))
+				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d 0-16", f.PayloadType))
 			default:
 				// Generic format for unknown audio codecs
-				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d %s/%d/%d", f.PayloadType, f.Name, f.SampleRate, f.NumChannels))
+				// For telephone-event, don't include NumChannels
+				if f.Name == "telephone-event" {
+					formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d telephone-event/%d", f.PayloadType, f.SampleRate))
+					formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d 0-16", f.PayloadType))
+				} else {
+					if f.NumChannels > 1 {
+						formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d %s/%d/%d", f.PayloadType, f.Name, f.SampleRate, f.NumChannels))
+					} else {
+						formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d %s/%d", f.PayloadType, f.Name, f.SampleRate))
+					}
+				}
 			}
 		}
 		fmts[i] = strconv.Itoa(int(f.PayloadType))
@@ -1094,38 +1107,62 @@ func CombineSDP(sessions []*MediaSession) []byte {
 			mediaAttrs = sessSD.Values("a")
 		}
 
-		// Also add mode and crypto if present
-		if sess.Mode != "" {
-			mediaAttrs = append(mediaAttrs, sess.Mode)
+		// Filter out attributes that we'll add explicitly to avoid duplicates
+		filteredAttrs := []string{}
+		hasMode := false
+		hasPtime := false
+		hasMaxptime := false
+		hasCrypto := false
+
+		for _, attr := range mediaAttrs {
+			// Skip mode, ptime, maxptime as we'll add them explicitly
+			if strings.HasPrefix(attr, "sendrecv") || strings.HasPrefix(attr, "recvonly") || strings.HasPrefix(attr, "sendonly") {
+				hasMode = true
+				continue
+			}
+			if strings.HasPrefix(attr, "ptime:") {
+				hasPtime = true
+				continue
+			}
+			if strings.HasPrefix(attr, "maxptime:") {
+				hasMaxptime = true
+				continue
+			}
+			if strings.HasPrefix(attr, "crypto:") {
+				hasCrypto = true
+			}
+			// Keep rtpmap, fmtp, and other attributes
+			filteredAttrs = append(filteredAttrs, attr)
 		}
 
-		// Add crypto if SRTP is enabled
-		if sess.SecureRTP == 1 && sess.localCtxSRTP != nil {
-			// We need to generate crypto attribute
-			// For now, we'll extract it from the session SDP if available
-			for _, attr := range mediaAttrs {
-				if strings.HasPrefix(attr, "crypto:") {
-					// Already in mediaAttrs, skip
-					break
-				}
-			}
-			// If not found in mediaAttrs, check all attributes
+		// Add mode if not already present
+		if sess.Mode != "" && !hasMode {
+			filteredAttrs = append(filteredAttrs, sess.Mode)
+		}
+
+		// Add crypto if SRTP is enabled and not already present
+		if sess.SecureRTP == 1 && sess.localCtxSRTP != nil && !hasCrypto {
 			allAttrs := sessSD.Values("a")
 			for _, attr := range allAttrs {
 				if strings.HasPrefix(attr, "crypto:") {
-					mediaAttrs = append(mediaAttrs, attr)
+					filteredAttrs = append(filteredAttrs, attr)
 					break
 				}
 			}
 		}
 
-		// Add audio-specific attributes
+		// Add audio-specific attributes if not already present
 		if mediaType == "audio" {
-			mediaAttrs = append(mediaAttrs, "a=ptime:20", "a=maxptime:20")
+			if !hasPtime {
+				filteredAttrs = append(filteredAttrs, "a=ptime:20")
+			}
+			if !hasMaxptime {
+				filteredAttrs = append(filteredAttrs, "a=maxptime:20")
+			}
 		}
 
 		// Add all media attributes
-		for _, attr := range mediaAttrs {
+		for _, attr := range filteredAttrs {
 			if !strings.HasPrefix(attr, "a=") {
 				s = append(s, "a="+attr)
 			} else {
