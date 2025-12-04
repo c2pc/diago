@@ -1033,6 +1033,7 @@ func CombineSDP(sessions []*MediaSession) []byte {
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
 	}
+	// Note: We don't add session-level connection line if it's the same as media-level
 
 	// Add media descriptions from each session
 	// Sort: audio first, then video
@@ -1054,22 +1055,10 @@ func CombineSDP(sessions []*MediaSession) []byte {
 			continue
 		}
 
-		sessSDP := sess.LocalSDP()
-		sessSD := sdp.SessionDescription{}
-		if err := sdp.Unmarshal(sessSDP, &sessSD); err != nil {
-			continue
-		}
-
 		// Get media description
 		mediaType := sess.MediaType
 		if mediaType == "" {
 			mediaType = "audio"
-		}
-
-		// Verify media description exists
-		_, err := sessSD.MediaDescription(mediaType)
-		if err != nil {
-			continue
 		}
 
 		// Add m= line
@@ -1089,84 +1078,72 @@ func CombineSDP(sessions []*MediaSession) []byte {
 			rtpProfile = "RTP/SAVP"
 		}
 
-		// Add connection line for this media if different from session-level
+		// Add connection line for this media
+		// RFC 4566: Each media description can have its own connection line
 		mediaConnIP := connectionIP
 		if mediaConnIP == nil {
 			mediaConnIP = sess.Laddr.IP
 		}
+		// Always add connection line for each media (required by RFC 4566)
 		s = append(s, fmt.Sprintf("c=IN IP4 %s", mediaConnIP))
 
 		s = append(s, fmt.Sprintf("m=%s %d %s %s", mediaType, sess.Laddr.Port, rtpProfile, strings.Join(fmts, " ")))
 
-		// Add attributes for this media
-		// Use MediaAttributes to get attributes specific to this media type
-		// This includes rtpmap, fmtp, and other media-specific attributes
-		mediaAttrs := sessSD.MediaAttributes(mediaType)
-		if len(mediaAttrs) == 0 {
-			// Fallback to all attributes if MediaAttributes returns empty
-			mediaAttrs = sessSD.Values("a")
-		}
+		// Generate SDP for this session to get all attributes
+		sessSDP := sess.LocalSDP()
 
-		// Filter out attributes that we'll add explicitly to avoid duplicates
-		filteredAttrs := []string{}
+		// Parse SDP lines directly to extract attributes for this media type
+		lines := strings.Split(string(sessSDP), "\r\n")
+		inMedia := false
 		hasMode := false
 		hasPtime := false
 		hasMaxptime := false
 		hasCrypto := false
 
-		for _, attr := range mediaAttrs {
-			// Skip mode, ptime, maxptime as we'll add them explicitly
-			if strings.HasPrefix(attr, "sendrecv") || strings.HasPrefix(attr, "recvonly") || strings.HasPrefix(attr, "sendonly") {
-				hasMode = true
+		for _, line := range lines {
+			if strings.HasPrefix(line, "m="+mediaType+" ") {
+				inMedia = true
 				continue
 			}
-			if strings.HasPrefix(attr, "ptime:") {
-				hasPtime = true
-				continue
-			}
-			if strings.HasPrefix(attr, "maxptime:") {
-				hasMaxptime = true
-				continue
-			}
-			if strings.HasPrefix(attr, "crypto:") {
-				hasCrypto = true
-			}
-			// Keep rtpmap, fmtp, and other attributes
-			filteredAttrs = append(filteredAttrs, attr)
-		}
-
-		// Add mode if not already present
-		if sess.Mode != "" && !hasMode {
-			filteredAttrs = append(filteredAttrs, sess.Mode)
-		}
-
-		// Add crypto if SRTP is enabled and not already present
-		if sess.SecureRTP == 1 && sess.localCtxSRTP != nil && !hasCrypto {
-			allAttrs := sessSD.Values("a")
-			for _, attr := range allAttrs {
-				if strings.HasPrefix(attr, "crypto:") {
-					filteredAttrs = append(filteredAttrs, attr)
+			if inMedia {
+				if strings.HasPrefix(line, "m=") {
+					// Next media, stop
 					break
+				}
+				if strings.HasPrefix(line, "a=") {
+					attr := strings.TrimPrefix(line, "a=")
+					// Check for mode, ptime, maxptime to avoid duplicates
+					if attr == "sendrecv" || attr == "recvonly" || attr == "sendonly" {
+						hasMode = true
+					} else if strings.HasPrefix(attr, "ptime:") {
+						hasPtime = true
+					} else if strings.HasPrefix(attr, "maxptime:") {
+						hasMaxptime = true
+					} else if strings.HasPrefix(attr, "crypto:") {
+						hasCrypto = true
+					}
+					// Add all attributes (rtpmap, fmtp, etc.)
+					s = append(s, line)
 				}
 			}
 		}
 
-		// Add audio-specific attributes if not already present
-		if mediaType == "audio" {
-			if !hasPtime {
-				filteredAttrs = append(filteredAttrs, "a=ptime:20")
+		// Ensure mode is present (default to sendrecv if not set)
+		if !hasMode {
+			mode := sess.Mode
+			if mode == "" {
+				mode = sdp.ModeSendrecv
 			}
-			if !hasMaxptime {
-				filteredAttrs = append(filteredAttrs, "a=maxptime:20")
-			}
+			s = append(s, "a="+mode)
 		}
 
-		// Add all media attributes
-		for _, attr := range filteredAttrs {
-			if !strings.HasPrefix(attr, "a=") {
-				s = append(s, "a="+attr)
-			} else {
-				s = append(s, attr)
+		// Ensure audio-specific attributes are present
+		if mediaType == "audio" {
+			if !hasPtime {
+				s = append(s, "a=ptime:20")
+			}
+			if !hasMaxptime {
+				s = append(s, "a=maxptime:20")
 			}
 		}
 	}
