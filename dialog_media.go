@@ -49,9 +49,16 @@ type DialogMedia struct {
 	// Only safe to use after dialog Answered (Completed state)
 	mediaSession *media.MediaSession
 
+	// videoMediaSession is RTP session for video
+	// Only created when video is supported
+	videoMediaSession *media.MediaSession
+
 	// rtp session is created for usage with RTPPacketReader and RTPPacketWriter
 	// it adds RTCP layer and RTP monitoring before passing packets to MediaSession
 	rtpSession *media.RTPSession
+	// videoRtpSession is RTP session for video
+	videoRtpSession *media.RTPSession
+
 	// Packet reader is default reader for RTP audio stream
 	// Use always AudioReader to get current Audio reader
 	// Use this only as read only
@@ -64,9 +71,17 @@ type DialogMedia struct {
 	// Use this only as read only
 	RTPPacketWriter *media.RTPPacketWriter
 
+	// Video RTP packet reader and writer
+	VideoRTPPacketReader *media.RTPPacketReader
+	VideoRTPPacketWriter *media.RTPPacketWriter
+
 	// In case we are chaining audio readers
 	audioReader io.Reader
 	audioWriter io.Writer
+
+	// In case we are chaining video readers
+	videoReader io.Reader
+	videoWriter io.Writer
 
 	// lastInvite is actual last invite sent by remote REINVITE
 	// We do not use sipgo as this needs mutex but also keeping original invite
@@ -91,10 +106,11 @@ func (d *DialogMedia) Close() error {
 	onClose := d.onClose
 	d.onClose = nil
 	m := d.mediaSession
+	vm := d.videoMediaSession
 
 	d.mu.Unlock()
 
-	var e1, e2 error
+	var e1, e2, e3 error
 	if onClose != nil {
 		e1 = onClose()
 	}
@@ -102,7 +118,11 @@ func (d *DialogMedia) Close() error {
 	if m != nil {
 		e2 = m.Close()
 	}
-	return errors.Join(e1, e2)
+
+	if vm != nil {
+		e3 = vm.Close()
+	}
+	return errors.Join(e1, e2, e3)
 }
 
 func (d *DialogMedia) OnClose(f func() error) {
@@ -142,7 +162,7 @@ func (d *DialogMedia) initRTPSessionUnsafe(m *media.MediaSession, rtpSess *media
 }
 
 func (d *DialogMedia) initMediaSessionFromConf(conf MediaConfig) error {
-	if d.mediaSession != nil {
+	if d.mediaSession != nil || d.videoMediaSession != nil {
 		// To allow testing or customizing current underhood session, this may be
 		// precreated, so we want to return if already initialized.
 		// Ex: To fake IO on RTP connection or different media stacks
@@ -158,19 +178,72 @@ func (d *DialogMedia) initMediaSessionFromConf(conf MediaConfig) error {
 		}
 	}
 
-	sess := &media.MediaSession{
-		Codecs:     slices.Clone(conf.Codecs),
-		Laddr:      net.UDPAddr{IP: bindIP, Port: 0},
-		ExternalIP: conf.externalIP,
-		Mode:       sdp.ModeSendrecv,
-		SecureRTP:  conf.secureRTP,
-		SRTPAlg:    conf.SecureRTPAlg,
+	// Separate audio and video codecs
+	audioCodecs := []media.Codec{}
+	videoCodecs := []media.Codec{}
+
+	for _, codec := range conf.Codecs {
+		if codec.Name == "H264" || codec.Name == "VP8" || codec.Name == "VP9" {
+			videoCodecs = append(videoCodecs, codec)
+		} else {
+			audioCodecs = append(audioCodecs, codec)
+		}
 	}
 
-	if err := sess.Init(); err != nil {
-		return err
+	// Check that we have at least one codec
+	if len(audioCodecs) == 0 && len(videoCodecs) == 0 {
+		return fmt.Errorf("no codecs provided in MediaConfig")
 	}
-	d.mediaSession = sess
+
+	// Create audio session
+	if len(audioCodecs) > 0 {
+		audioMode := conf.AudioMode
+		if audioMode == "" {
+			audioMode = sdp.ModeSendrecv
+		}
+		sess := &media.MediaSession{
+			MediaType:  "audio",
+			Codecs:     slices.Clone(audioCodecs),
+			Laddr:      net.UDPAddr{IP: bindIP, Port: 0},
+			ExternalIP: conf.externalIP,
+			Mode:       audioMode,
+			SecureRTP:  conf.secureRTP,
+			SRTPAlg:    conf.SecureRTPAlg,
+		}
+
+		if err := sess.Init(); err != nil {
+			return err
+		}
+		d.mediaSession = sess
+	}
+
+	// Create video session if video codecs are present
+	if len(videoCodecs) > 0 {
+		videoMode := conf.VideoMode
+		if videoMode == "" {
+			videoMode = sdp.ModeSendrecv
+		}
+		videoSess := &media.MediaSession{
+			MediaType:  "video",
+			Codecs:     slices.Clone(videoCodecs),
+			Laddr:      net.UDPAddr{IP: bindIP, Port: 0},
+			ExternalIP: conf.externalIP,
+			Mode:       videoMode,
+			SecureRTP:  conf.secureRTP,
+			SRTPAlg:    conf.SecureRTPAlg,
+		}
+
+		if err := videoSess.Init(); err != nil {
+			// If video session fails, we can still continue with audio only
+			// but return error if audio also failed
+			if d.mediaSession == nil {
+				return fmt.Errorf("failed to initialize video session and no audio session: %w", err)
+			}
+		} else {
+			d.videoMediaSession = videoSess
+		}
+	}
+
 	return nil
 }
 
@@ -198,8 +271,19 @@ func (d *DialogMedia) handleMediaUpdate(req *sip.Request, tx sip.ServerTransacti
 	}
 
 	// Reply with updated SDP
-	sd := d.mediaSession.LocalSDP()
-	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", sd)
+	// Combine audio and video SDP if both exist
+	var sdpBody []byte
+	if d.mediaSession != nil && d.videoMediaSession != nil {
+		sessions := []*media.MediaSession{d.mediaSession, d.videoMediaSession}
+		sdpBody = media.CombineSDP(sessions)
+	} else if d.videoMediaSession != nil {
+		sdpBody = d.videoMediaSession.LocalSDP()
+	} else if d.mediaSession != nil {
+		sdpBody = d.mediaSession.LocalSDP()
+	} else {
+		return fmt.Errorf("no media session present")
+	}
+	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", sdpBody)
 	res.AppendHeader(contactHDR)
 	res.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
 	return tx.Respond(res)
@@ -207,7 +291,7 @@ func (d *DialogMedia) handleMediaUpdate(req *sip.Request, tx sip.ServerTransacti
 
 // Must be protected with lock
 func (d *DialogMedia) sdpReInviteUnsafe(sdp []byte) error {
-	if d.mediaSession == nil {
+	if d.mediaSession == nil && d.videoMediaSession == nil {
 		return fmt.Errorf("no media session present")
 	}
 
@@ -232,39 +316,199 @@ func (d *DialogMedia) checkEarlyMedia(remoteSDP []byte) error {
 	return d.sdpUpdateUnsafe(remoteSDP)
 }
 
-func (d *DialogMedia) sdpUpdateUnsafe(sdp []byte) error {
-	if sdp == nil {
+func (d *DialogMedia) sdpUpdateUnsafe(sdpData []byte) error {
+	if sdpData == nil {
 		return nil
 	}
 
-	msess := d.mediaSession.Fork()
-	if err := msess.RemoteSDP(sdp); err != nil {
-		return fmt.Errorf("sdp update media remote SDP applying failed: %w", err)
+	// Parse SDP to check for audio and video
+	sd := sdp.SessionDescription{}
+	if err := sdp.Unmarshal(sdpData, &sd); err != nil {
+		return fmt.Errorf("failed to parse SDP: %w", err)
 	}
 
-	// Stop existing rtp
-	if d.rtpSession != nil {
-		if err := d.rtpSession.Close(); err != nil {
-			return err
+	// Update audio session if it exists and audio is in SDP
+	if d.mediaSession != nil {
+		_, err := sd.MediaDescription("audio")
+		if err == nil {
+			// Audio is present in SDP
+			msess := d.mediaSession.Fork()
+			if err := msess.RemoteSDP(sdpData); err != nil {
+				return fmt.Errorf("failed to update audio session: %w", err)
+			}
+
+			// Stop existing rtp
+			if d.rtpSession != nil {
+				if err := d.rtpSession.Close(); err != nil {
+					return err
+				}
+			}
+
+			rtpSess := media.NewRTPSession(msess)
+			d.onCloseUnsafe(func() error {
+				return rtpSess.Close()
+			})
+
+			if err := rtpSess.MonitorBackground(); err != nil {
+				rtpSess.Close()
+				return err
+			}
+
+			// Initialize or update audio RTP packet reader/writer
+			if d.RTPPacketReader != nil {
+				d.RTPPacketReader.UpdateRTPSession(rtpSess)
+			} else {
+				d.RTPPacketReader = media.NewRTPPacketReaderSession(rtpSess)
+			}
+			if d.RTPPacketWriter != nil {
+				d.RTPPacketWriter.UpdateRTPSession(rtpSess)
+			} else {
+				d.RTPPacketWriter = media.NewRTPPacketWriterSession(rtpSess)
+			}
+
+			// update the reference
+			d.mediaSession = msess
+			d.rtpSession = rtpSess
 		}
 	}
 
-	rtpSess := media.NewRTPSession(msess)
-	d.onCloseUnsafe(func() error {
-		return rtpSess.Close()
-	})
+	// Check if video is in SDP
+	_, err := sd.MediaDescription("video")
+	if err == nil {
+		// Video is present in SDP
+		if d.videoMediaSession == nil {
+			// Video session doesn't exist, create it from remote SDP
+			// Parse video codecs from remote SDP
+			md, err := sd.MediaDescription("video")
+			if err != nil {
+				return fmt.Errorf("failed to get video media description: %w", err)
+			}
 
-	if err := rtpSess.MonitorBackground(); err != nil {
-		rtpSess.Close()
-		return err
+			// Get attributes for video
+			attrs := sd.MediaAttributes("video")
+			if len(attrs) == 0 {
+				attrs = sd.Values("a")
+			}
+
+			// Parse codecs from SDP
+			codecs := make([]media.Codec, len(md.Formats))
+			n, err := media.CodecsFromSDPRead(md.Formats, attrs, codecs)
+			if err != nil || n == 0 {
+				// If we can't parse codecs, use default video codecs
+				codecs = []media.Codec{media.CodecVideoH264}
+				n = 1
+			}
+
+			// Filter only video codecs
+			videoCodecs := []media.Codec{}
+			for i := 0; i < n; i++ {
+				if codecs[i].Name == "H264" || codecs[i].Name == "VP8" || codecs[i].Name == "VP9" {
+					videoCodecs = append(videoCodecs, codecs[i])
+				}
+			}
+
+			// If no video codecs found, use default
+			if len(videoCodecs) == 0 {
+				videoCodecs = []media.Codec{media.CodecVideoH264}
+			}
+
+			// Get bind IP and settings from existing audio session
+			bindIP := net.IP{}
+			externalIP := net.IP{}
+			secureRTP := 0
+			srtpAlg := uint16(0)
+			if d.mediaSession != nil {
+				bindIP = d.mediaSession.Laddr.IP
+				externalIP = d.mediaSession.ExternalIP
+				secureRTP = d.mediaSession.SecureRTP
+				srtpAlg = d.mediaSession.SRTPAlg
+			} else {
+				var err error
+				bindIP, _, err = sip.ResolveInterfacesIP("ip4", nil)
+				if err != nil {
+					return fmt.Errorf("failed to resolve bind IP: %w", err)
+				}
+			}
+
+			// Create video session
+			videoSess := &media.MediaSession{
+				MediaType:  "video",
+				Codecs:     videoCodecs,
+				Laddr:      net.UDPAddr{IP: bindIP, Port: 0},
+				ExternalIP: externalIP,
+				Mode:       sdp.ModeSendrecv,
+				SecureRTP:  secureRTP,
+				SRTPAlg:    srtpAlg,
+			}
+
+			if err := videoSess.Init(); err != nil {
+				return fmt.Errorf("failed to initialize video session: %w", err)
+			}
+
+			d.videoMediaSession = videoSess
+		}
+
+		// Update video session
+		vmsess := d.videoMediaSession.Fork()
+		if err := vmsess.RemoteSDP(sdpData); err != nil {
+			return fmt.Errorf("failed to update video session: %w", err)
+		}
+
+		// Stop existing video rtp
+		if d.videoRtpSession != nil {
+			if err := d.videoRtpSession.Close(); err != nil {
+				return err
+			}
+		}
+
+		videoRtpSess := media.NewRTPSession(vmsess)
+		d.onCloseUnsafe(func() error {
+			return videoRtpSess.Close()
+		})
+
+		if err := videoRtpSess.MonitorBackground(); err != nil {
+			videoRtpSess.Close()
+			return err
+		}
+
+		// Initialize or update video RTP packet reader/writer
+		if d.VideoRTPPacketReader != nil {
+			d.VideoRTPPacketReader.UpdateRTPSession(videoRtpSess)
+		} else {
+			d.VideoRTPPacketReader = media.NewRTPPacketReaderSession(videoRtpSess)
+		}
+		if d.VideoRTPPacketWriter != nil {
+			d.VideoRTPPacketWriter.UpdateRTPSession(videoRtpSess)
+		} else {
+			d.VideoRTPPacketWriter = media.NewRTPPacketWriterSession(videoRtpSess)
+		}
+
+		// update the reference
+		d.videoMediaSession = vmsess
+		d.videoRtpSession = videoRtpSess
+	} else {
+		// Video is not in SDP - remove video session if exists
+		if d.videoMediaSession != nil {
+			// Close video RTP session if exists
+			if d.videoRtpSession != nil {
+				if err := d.videoRtpSession.Close(); err != nil {
+					// Continue anyway
+				}
+				d.videoRtpSession = nil
+			}
+
+			// Close video media session to prevent sending video in response SDP
+			if err := d.videoMediaSession.Close(); err != nil {
+				// Continue anyway
+			}
+			d.videoMediaSession = nil
+			d.VideoRTPPacketReader = nil
+			d.VideoRTPPacketWriter = nil
+			d.videoReader = nil
+			d.videoWriter = nil
+		}
 	}
 
-	d.RTPPacketReader.UpdateRTPSession(rtpSess)
-	d.RTPPacketWriter.UpdateRTPSession(rtpSess)
-
-	// update the reference
-	d.mediaSession = msess
-	d.rtpSession = rtpSess
 	return nil
 }
 
@@ -418,6 +662,164 @@ func (d *DialogMedia) SetAudioWriter(r io.Writer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.audioWriter = r
+}
+
+// VideoReader gets current video reader. It MUST be called after Answer.
+// Reading buffer should be equal or bigger of media.RTPBufSize
+func (d *DialogMedia) VideoReader() (io.Reader, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.videoMediaSession == nil {
+		return nil, fmt.Errorf("no video media session")
+	}
+
+	if d.VideoRTPPacketReader == nil {
+		return nil, fmt.Errorf("no video RTP packet reader")
+	}
+
+	if d.videoReader != nil {
+		return d.videoReader, nil
+	}
+	return d.VideoRTPPacketReader, nil
+}
+
+// VideoWriter gets current video writer. It MUST be called after Answer.
+func (d *DialogMedia) VideoWriter() (io.Writer, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.videoMediaSession == nil {
+		return nil, fmt.Errorf("no video media session")
+	}
+
+	if d.VideoRTPPacketWriter == nil {
+		return nil, fmt.Errorf("no video RTP packet writer")
+	}
+
+	if d.videoWriter != nil {
+		return d.videoWriter, nil
+	}
+	return d.VideoRTPPacketWriter, nil
+}
+
+// SetVideoReader adds/changes video reader.
+// Use this when you want to have interceptors of your video
+func (d *DialogMedia) SetVideoReader(r io.Reader) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.videoReader = r
+}
+
+// SetVideoWriter adds/changes video writer.
+// Use this when you want to have pipelines of your video
+func (d *DialogMedia) SetVideoWriter(r io.Writer) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.videoWriter = r
+}
+
+// VideoMediaSession returns video media session
+func (d *DialogMedia) VideoMediaSession() *media.MediaSession {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.videoMediaSession
+}
+
+// AddVideoSession dynamically adds video session during active call
+// This allows adding video to an audio-only call using re-INVITE
+// codecs: video codecs to use (e.g., media.CodecVideoH264)
+// mode: SDP mode (sdp.ModeSendrecv, sdp.ModeRecvonly, sdp.ModeSendonly)
+func (d *DialogMedia) AddVideoSession(codecs []media.Codec, mode string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.videoMediaSession != nil {
+		return fmt.Errorf("video session already exists")
+	}
+
+	if len(codecs) == 0 {
+		return fmt.Errorf("no video codecs provided")
+	}
+
+	// Get bind IP from existing audio session or resolve
+	bindIP := net.IP{}
+	if d.mediaSession != nil {
+		bindIP = d.mediaSession.Laddr.IP
+	} else {
+		var err error
+		bindIP, _, err = sip.ResolveInterfacesIP("ip4", nil)
+		if err != nil {
+			return fmt.Errorf("failed to resolve bind IP: %w", err)
+		}
+	}
+
+	// Get external IP from existing audio session
+	externalIP := net.IP{}
+	if d.mediaSession != nil {
+		externalIP = d.mediaSession.ExternalIP
+	}
+
+	// Get SRTP settings from existing audio session
+	secureRTP := 0
+	srtpAlg := uint16(0)
+	if d.mediaSession != nil {
+		secureRTP = d.mediaSession.SecureRTP
+		srtpAlg = d.mediaSession.SRTPAlg
+	}
+
+	if mode == "" {
+		mode = sdp.ModeSendrecv
+	}
+
+	videoSess := &media.MediaSession{
+		MediaType:  "video",
+		Codecs:     slices.Clone(codecs),
+		Laddr:      net.UDPAddr{IP: bindIP, Port: 0},
+		ExternalIP: externalIP,
+		Mode:       mode,
+		SecureRTP:  secureRTP,
+		SRTPAlg:    srtpAlg,
+	}
+
+	if err := videoSess.Init(); err != nil {
+		return fmt.Errorf("failed to initialize video session: %w", err)
+	}
+
+	d.videoMediaSession = videoSess
+	return nil
+}
+
+// RemoveVideoSession removes video session during active call
+// This allows removing video from a video call using re-INVITE
+func (d *DialogMedia) RemoveVideoSession() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.videoMediaSession == nil {
+		return nil // Already removed
+	}
+
+	// Close video RTP session if exists
+	if d.videoRtpSession != nil {
+		if err := d.videoRtpSession.Close(); err != nil {
+			// Continue anyway
+		}
+		d.videoRtpSession = nil
+	}
+
+	// Close video media session
+	if err := d.videoMediaSession.Close(); err != nil {
+		// Continue anyway
+	}
+
+	d.videoMediaSession = nil
+	d.VideoRTPPacketReader = nil
+	d.VideoRTPPacketWriter = nil
+	d.videoReader = nil
+	d.videoWriter = nil
+
+	return nil
 }
 
 func (d *DialogMedia) Media() *DialogMedia {

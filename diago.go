@@ -145,6 +145,15 @@ type MediaConfig struct {
 	bindIP     net.IP
 	externalIP net.IP
 
+	// AudioMode sets SDP mode for audio media (sendrecv, recvonly, sendonly)
+	// If not set, defaults to sendrecv
+	// Use constants: sdp.ModeSendrecv, sdp.ModeRecvonly, sdp.ModeSendonly
+	AudioMode string
+	// VideoMode sets SDP mode for video media (sendrecv, recvonly, sendonly)
+	// If not set, defaults to sendrecv
+	// Use constants: sdp.ModeSendrecv, sdp.ModeRecvonly, sdp.ModeSendonly
+	VideoMode string
+
 	// TODO, For now it is global on media package
 	// RTPPortStart int
 	// RTPPortEnd   int

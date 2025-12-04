@@ -88,6 +88,9 @@ type MediaSession struct {
 	// 1. make this list of codecs as we need to match also sample rate and ptime
 	// 2. rtp session when matching incoming packet sample rate for RTCP should use this
 
+	// MediaType is the type of media: "audio" or "video"
+	MediaType string
+
 	// Codecs are initial list of Codecs that would be used in SDP generation
 	Codecs []Codec
 
@@ -124,8 +127,24 @@ type MediaSession struct {
 
 func NewMediaSession(ip net.IP, port int) (s *MediaSession, e error) {
 	s = &MediaSession{
+		MediaType: "audio",
 		Codecs: []Codec{
 			CodecAudioUlaw, CodecAudioAlaw, CodecTelephoneEvent8000,
+		},
+		Mode: sdp.ModeSendrecv,
+	}
+	s.Laddr.IP = ip
+	s.Laddr.Port = port
+
+	return s, s.Init()
+}
+
+// NewVideoMediaSession creates a new video media session
+func NewVideoMediaSession(ip net.IP, port int) (s *MediaSession, e error) {
+	s = &MediaSession{
+		MediaType: "video",
+		Codecs: []Codec{
+			CodecVideoH264, CodecVideoVP8, CodecVideoVP9,
 		},
 		Mode: sdp.ModeSendrecv,
 	}
@@ -182,7 +201,26 @@ func (s *MediaSession) InitWithSDP(localSDP []byte) error {
 	if err != nil {
 		return err
 	}
-	md, err := sd.MediaDescription("audio")
+
+	// Determine media type if not set
+	mediaType := s.MediaType
+	if mediaType == "" {
+		// Try audio first, then video
+		_, err := sd.MediaDescription("audio")
+		if err == nil {
+			mediaType = "audio"
+		} else {
+			_, err := sd.MediaDescription("video")
+			if err == nil {
+				mediaType = "video"
+			} else {
+				return fmt.Errorf("no audio or video media description found in SDP")
+			}
+		}
+		s.MediaType = mediaType
+	}
+
+	md, err := sd.MediaDescription(mediaType)
 	if err != nil {
 		return err
 	}
@@ -223,12 +261,13 @@ func (s *MediaSession) StartRTP(rw int8) error {
 // After this call it still expected that
 func (s *MediaSession) Fork() *MediaSession {
 	cp := MediaSession{
-		Laddr:    s.Laddr, // TODO clone it although it is read only
-		rtpConn:  s.rtpConn,
-		rtcpConn: s.rtcpConn,
-		Codecs:   slices.Clone(s.Codecs),
-		Mode:     sdp.ModeSendrecv,
-		sdp:      slices.Clone(s.sdp),
+		MediaType: s.MediaType,
+		Laddr:     s.Laddr, // TODO clone it although it is read only
+		rtpConn:   s.rtpConn,
+		rtcpConn:  s.rtcpConn,
+		Codecs:    slices.Clone(s.Codecs),
+		Mode:      s.Mode, // Preserve original mode
+		sdp:       slices.Clone(s.sdp),
 	}
 	return &cp
 }
@@ -325,7 +364,12 @@ func (s *MediaSession) LocalSDP() []byte {
 		}
 	}
 
-	return generateSDPForAudio(rtpProfile, ip, connIP, rtpPort, s.Mode, codecs, localSDES)
+	mediaType := s.MediaType
+	if mediaType == "" {
+		mediaType = "audio" // Default to audio for backward compatibility
+	}
+
+	return generateSDP(mediaType, rtpProfile, ip, connIP, rtpPort, s.Mode, codecs, localSDES)
 }
 
 func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
@@ -334,7 +378,25 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 		return fmt.Errorf("fail to parse received SDP: %w", err)
 	}
 
-	md, err := sd.MediaDescription("audio")
+	// Determine media type if not set
+	mediaType := s.MediaType
+	if mediaType == "" {
+		// Try audio first, then video
+		_, err := sd.MediaDescription("audio")
+		if err == nil {
+			mediaType = "audio"
+		} else {
+			_, err := sd.MediaDescription("video")
+			if err == nil {
+				mediaType = "video"
+			} else {
+				return fmt.Errorf("no audio or video media description found in SDP")
+			}
+		}
+		s.MediaType = mediaType
+	}
+
+	md, err := sd.MediaDescription(mediaType)
 	if err != nil {
 		return err
 	}
@@ -350,7 +412,12 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 	}
 
 	codecs := make([]Codec, len(md.Formats))
-	attrs := sd.Values("a")
+	// Get attributes for this specific media type
+	attrs := sd.MediaAttributes(mediaType)
+	if len(attrs) == 0 {
+		// Fallback to all attributes if MediaAttributes returns empty
+		attrs = sd.Values("a")
+	}
 	n, err := CodecsFromSDPRead(md.Formats, attrs, codecs)
 	if err != nil {
 		if n == 0 {
@@ -372,8 +439,9 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 	if err != nil {
 		return err
 	}
-	// Check for SDES
-	for _, v := range attrs {
+	// Check for SDES - use all attributes for crypto (can be session-level or media-level)
+	allAttrs := sd.Values("a")
+	for _, v := range allAttrs {
 		if strings.HasPrefix(v, "crypto:") {
 			vals := strings.Split(v, " ")
 			if len(vals) < 3 {
@@ -437,8 +505,19 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 	filter := codecs[:0] // reuse buffer
 	for _, rc := range codecs {
 		for _, c := range s.Codecs {
-			if c == rc {
-				filter = append(filter, c)
+			// Compare codecs by name and sample rate (not PayloadType, as it can vary in SDP)
+			// For video codecs, we only compare by name
+			// For audio codecs, we also compare sample rate
+			if c.Name == rc.Name {
+				// For audio codecs, also check sample rate
+				if c.Name != "H264" && c.Name != "VP8" && c.Name != "VP9" {
+					if c.SampleRate != rc.SampleRate {
+						continue
+					}
+				}
+				// Use remote PayloadType (rc) as it's what remote side proposed
+				matchedCodec := rc
+				filter = append(filter, matchedCodec)
 				break
 			}
 		}
@@ -784,34 +863,53 @@ type sdesInline struct {
 	tag    int
 }
 
-func generateSDPForAudio(rtpProfile string, originIP net.IP, connectionIP net.IP, rtpPort int, mode string, codecs []Codec, sdes sdesInline) []byte {
+// generateSDP generates SDP for audio or video media
+func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectionIP net.IP, rtpPort int, mode string, codecs []Codec, sdes sdesInline) []byte {
 	ntpTime := GetCurrentNTPTimestamp()
 
 	fmts := make([]string, len(codecs))
 	formatsMap := []string{}
 	for i, f := range codecs {
-		// TODO should we just go generic
-		switch f.PayloadType {
-		case CodecAudioUlaw.PayloadType:
-			formatsMap = append(formatsMap, "a=rtpmap:0 PCMU/8000")
-		case CodecAudioAlaw.PayloadType:
-			formatsMap = append(formatsMap, "a=rtpmap:8 PCMA/8000")
-		case CodecAudioOpus.PayloadType:
-			formatsMap = append(formatsMap, "a=rtpmap:96 opus/48000/2")
-			// Providing 0 when FEC cannot be used on the receiving side is RECOMMENDED.
-			// https://datatracker.ietf.org/doc/html/rfc7587
-			formatsMap = append(formatsMap, "a=fmtp:96 useinbandfec=0")
-		case CodecTelephoneEvent8000.PayloadType:
-			formatsMap = append(formatsMap, "a=rtpmap:101 telephone-event/8000")
-			formatsMap = append(formatsMap, "a=fmtp:101 0-16")
-		default:
-			s := fmt.Sprintf("a=rtpmap:%d %s/%d/%d", f.PayloadType, f.Name, f.SampleRate, f.NumChannels)
-			formatsMap = append(formatsMap, s)
+		// For video codecs, identify by name (not PayloadType, as it can vary in SDP)
+		// For audio codecs, we can use PayloadType for well-known codecs
+		if mediaType == "video" {
+			// Video codecs: identify by name
+			switch f.Name {
+			case "H264":
+				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d H264/90000", f.PayloadType))
+				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d profile-level-id=42e01f;packetization-mode=1", f.PayloadType))
+			case "VP8":
+				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d VP8/90000", f.PayloadType))
+			case "VP9":
+				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d VP9/90000", f.PayloadType))
+			default:
+				// Generic format for unknown video codecs
+				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d %s/90000", f.PayloadType, f.Name))
+			}
+		} else {
+			// Audio codecs: use PayloadType for well-known codecs
+			switch f.PayloadType {
+			case CodecAudioUlaw.PayloadType:
+				formatsMap = append(formatsMap, "a=rtpmap:0 PCMU/8000")
+			case CodecAudioAlaw.PayloadType:
+				formatsMap = append(formatsMap, "a=rtpmap:8 PCMA/8000")
+			case CodecAudioOpus.PayloadType:
+				formatsMap = append(formatsMap, "a=rtpmap:96 opus/48000/2")
+				// Providing 0 when FEC cannot be used on the receiving side is RECOMMENDED.
+				// https://datatracker.ietf.org/doc/html/rfc7587
+				formatsMap = append(formatsMap, "a=fmtp:96 useinbandfec=0")
+			case CodecTelephoneEvent8000.PayloadType:
+				formatsMap = append(formatsMap, "a=rtpmap:101 telephone-event/8000")
+				formatsMap = append(formatsMap, "a=fmtp:101 0-16")
+			default:
+				// Generic format for unknown audio codecs
+				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d %s/%d/%d", f.PayloadType, f.Name, f.SampleRate, f.NumChannels))
+			}
 		}
 		fmts[i] = strconv.Itoa(int(f.PayloadType))
 	}
 
-	// Support only ulaw and alaw
+	// Support audio and video
 	// TODO optimize this with string builder
 	s := []string{
 		"v=0",
@@ -820,14 +918,19 @@ func generateSDPForAudio(rtpProfile string, originIP net.IP, connectionIP net.IP
 		// "b=AS:84",
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
-		fmt.Sprintf("m=audio %d %s %s", rtpPort, rtpProfile, strings.Join(fmts, " ")),
+		fmt.Sprintf("m=%s %d %s %s", mediaType, rtpPort, rtpProfile, strings.Join(fmts, " ")),
 	}
 
 	s = append(s, formatsMap...)
-	s = append(s,
-		"a=ptime:20", // Needed for opus
-		"a=maxptime:20",
-		"a="+string(mode))
+
+	// Audio-specific attributes
+	if mediaType == "audio" {
+		s = append(s,
+			"a=ptime:20", // Needed for opus
+			"a=maxptime:20")
+	}
+
+	s = append(s, "a="+string(mode))
 
 	if sdes.alg != "" {
 		s = append(s, fmt.Sprintf("a=crypto:%d %s inline:%s", sdes.tag, sdes.alg, sdes.base64))
@@ -854,6 +957,182 @@ func generateSDPForAudio(rtpProfile string, originIP net.IP, connectionIP net.IP
 	// 	"a=rtcp-mux",
 	// 	fmt.Sprintf("a=rtcp:%d IN IP4 %s", rtpPort+1, connectionIP),
 	// }
+
+	res := strings.Join(s, "\r\n") + "\r\n"
+	return []byte(res)
+}
+
+// CombineSDP combines SDP from multiple media sessions (e.g., audio and video)
+// into a single SDP with multiple media descriptions
+func CombineSDP(sessions []*MediaSession) []byte {
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	if len(sessions) == 1 {
+		return sessions[0].LocalSDP()
+	}
+
+	// Get common SDP parts from first session
+	firstSDP := sessions[0].LocalSDP()
+	sd := sdp.SessionDescription{}
+	if err := sdp.Unmarshal(firstSDP, &sd); err != nil {
+		// Fallback to single session
+		return firstSDP
+	}
+
+	// Extract session-level attributes
+	ntpTime := GetCurrentNTPTimestamp()
+	originIP := net.IP{}
+	connectionIP := net.IP{}
+
+	// Parse origin
+	if o := sd.Value("o"); o != "" {
+		fields := strings.Fields(o)
+		if len(fields) >= 5 {
+			originIP = net.ParseIP(fields[4])
+		}
+	}
+
+	// Parse connection
+	if c := sd.Value("c"); c != "" {
+		fields := strings.Fields(c)
+		if len(fields) >= 3 {
+			connectionIP = net.ParseIP(fields[2])
+		}
+	}
+
+	if originIP == nil {
+		originIP = sessions[0].Laddr.IP
+	}
+	if connectionIP == nil {
+		connectionIP = sessions[0].ExternalIP
+		if connectionIP == nil {
+			connectionIP = originIP
+		}
+	}
+
+	// Build combined SDP
+	s := []string{
+		"v=0",
+		fmt.Sprintf("o=- %d %d IN IP4 %s", ntpTime, ntpTime, originIP),
+		"s=Sip Go Media",
+		fmt.Sprintf("c=IN IP4 %s", connectionIP),
+		"t=0 0",
+	}
+
+	// Add media descriptions from each session
+	// Sort: audio first, then video
+	var audioSess, videoSess *MediaSession
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		if sess.MediaType == "audio" {
+			audioSess = sess
+		} else if sess.MediaType == "video" {
+			videoSess = sess
+		}
+	}
+
+	// Process audio first, then video
+	for _, sess := range []*MediaSession{audioSess, videoSess} {
+		if sess == nil {
+			continue
+		}
+
+		sessSDP := sess.LocalSDP()
+		sessSD := sdp.SessionDescription{}
+		if err := sdp.Unmarshal(sessSDP, &sessSD); err != nil {
+			continue
+		}
+
+		// Get media description
+		mediaType := sess.MediaType
+		if mediaType == "" {
+			mediaType = "audio"
+		}
+
+		// Verify media description exists
+		_, err := sessSD.MediaDescription(mediaType)
+		if err != nil {
+			continue
+		}
+
+		// Add m= line
+		fmts := make([]string, len(sess.Codecs))
+		for i, c := range sess.Codecs {
+			fmts[i] = strconv.Itoa(int(c.PayloadType))
+		}
+		if len(sess.filterCodecs) > 0 {
+			fmts = fmts[:0]
+			for _, c := range sess.filterCodecs {
+				fmts = append(fmts, strconv.Itoa(int(c.PayloadType)))
+			}
+		}
+
+		rtpProfile := "RTP/AVP"
+		if sess.SecureRTP == 1 && !RTPProfileSAVPDisable {
+			rtpProfile = "RTP/SAVP"
+		}
+
+		// Add connection line for this media if different from session-level
+		mediaConnIP := connectionIP
+		if mediaConnIP == nil {
+			mediaConnIP = sess.Laddr.IP
+		}
+		s = append(s, fmt.Sprintf("c=IN IP4 %s", mediaConnIP))
+
+		s = append(s, fmt.Sprintf("m=%s %d %s %s", mediaType, sess.Laddr.Port, rtpProfile, strings.Join(fmts, " ")))
+
+		// Add attributes for this media
+		// Use MediaAttributes to get attributes specific to this media type
+		// This includes rtpmap, fmtp, and other media-specific attributes
+		mediaAttrs := sessSD.MediaAttributes(mediaType)
+		if len(mediaAttrs) == 0 {
+			// Fallback to all attributes if MediaAttributes returns empty
+			mediaAttrs = sessSD.Values("a")
+		}
+
+		// Also add mode and crypto if present
+		if sess.Mode != "" {
+			mediaAttrs = append(mediaAttrs, sess.Mode)
+		}
+
+		// Add crypto if SRTP is enabled
+		if sess.SecureRTP == 1 && sess.localCtxSRTP != nil {
+			// We need to generate crypto attribute
+			// For now, we'll extract it from the session SDP if available
+			for _, attr := range mediaAttrs {
+				if strings.HasPrefix(attr, "crypto:") {
+					// Already in mediaAttrs, skip
+					break
+				}
+			}
+			// If not found in mediaAttrs, check all attributes
+			allAttrs := sessSD.Values("a")
+			for _, attr := range allAttrs {
+				if strings.HasPrefix(attr, "crypto:") {
+					mediaAttrs = append(mediaAttrs, attr)
+					break
+				}
+			}
+		}
+
+		// Add audio-specific attributes
+		if mediaType == "audio" {
+			mediaAttrs = append(mediaAttrs, "a=ptime:20", "a=maxptime:20")
+		}
+
+		// Add all media attributes
+		for _, attr := range mediaAttrs {
+			if !strings.HasPrefix(attr, "a=") {
+				s = append(s, "a="+attr)
+			} else {
+				s = append(s, attr)
+			}
+		}
+	}
 
 	res := strings.Join(s, "\r\n") + "\r\n"
 	return []byte(res)

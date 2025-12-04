@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/c2pc/diago/media"
+	"github.com/c2pc/diago/media/sdp"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )
@@ -77,7 +78,18 @@ func (d *DialogServerSession) ProgressMedia() error {
 	}
 
 	headers := []sip.Header{sip.NewHeader("Content-Type", "application/sdp")}
-	body := rtpSess.Sess.LocalSDP()
+	// Combine audio and video SDP if both exist
+	var body []byte
+	if rtpSess.Sess != nil && d.videoMediaSession != nil {
+		sessions := []*media.MediaSession{rtpSess.Sess, d.videoMediaSession}
+		body = media.CombineSDP(sessions)
+	} else if d.videoMediaSession != nil {
+		body = d.videoMediaSession.LocalSDP()
+	} else if rtpSess.Sess != nil {
+		body = rtpSess.Sess.LocalSDP()
+	} else {
+		return fmt.Errorf("no media session available")
+	}
 	if err := d.DialogServerSession.Respond(183, "Session Progress", body, headers...); err != nil {
 		return err
 	}
@@ -112,9 +124,18 @@ func (d *DialogServerSession) RespondSDP(body []byte) error {
 // NOTE: Not final API
 func (d *DialogServerSession) Answer() error {
 	// Media Exists as early
-	if d.mediaSession != nil {
+	if d.mediaSession != nil || d.videoMediaSession != nil {
 		// This will now block until ACK received with 64*T1 as max.
-		if err := d.RespondSDP(d.mediaSession.LocalSDP()); err != nil {
+		var sdpBody []byte
+		if d.mediaSession != nil && d.videoMediaSession != nil {
+			sessions := []*media.MediaSession{d.mediaSession, d.videoMediaSession}
+			sdpBody = media.CombineSDP(sessions)
+		} else if d.videoMediaSession != nil {
+			sdpBody = d.videoMediaSession.LocalSDP()
+		} else {
+			sdpBody = d.mediaSession.LocalSDP()
+		}
+		if err := d.RespondSDP(sdpBody); err != nil {
 			return err
 		}
 		return nil
@@ -147,9 +168,18 @@ func (d *DialogServerSession) AnswerOptions(opt AnswerOptions) error {
 	d.mu.Unlock()
 
 	// If media exists as early, only respond 200
-	if d.mediaSession != nil {
+	if d.mediaSession != nil || d.videoMediaSession != nil {
 		// Check do codecs match
-		if err := d.RespondSDP(d.mediaSession.LocalSDP()); err != nil {
+		var sdpBody []byte
+		if d.mediaSession != nil && d.videoMediaSession != nil {
+			sessions := []*media.MediaSession{d.mediaSession, d.videoMediaSession}
+			sdpBody = media.CombineSDP(sessions)
+		} else if d.videoMediaSession != nil {
+			sdpBody = d.videoMediaSession.LocalSDP()
+		} else {
+			sdpBody = d.mediaSession.LocalSDP()
+		}
+		if err := d.RespondSDP(sdpBody); err != nil {
 			return err
 		}
 		return nil
@@ -164,7 +194,20 @@ func (d *DialogServerSession) AnswerOptions(opt AnswerOptions) error {
 	if err := d.initMediaSessionFromConf(conf); err != nil {
 		return err
 	}
-	rtpSess := media.NewRTPSession(d.mediaSession)
+
+	// Check if we have at least one media session
+	if d.mediaSession == nil && d.videoMediaSession == nil {
+		return fmt.Errorf("no media session available")
+	}
+
+	// Use audio session if available, otherwise video
+	var rtpSess *media.RTPSession
+	if d.mediaSession != nil {
+		rtpSess = media.NewRTPSession(d.mediaSession)
+	} else if d.videoMediaSession != nil {
+		rtpSess = media.NewRTPSession(d.videoMediaSession)
+	}
+
 	return d.answerSession(rtpSess)
 }
 
@@ -173,13 +216,30 @@ func (d *DialogServerSession) AnswerOptions(opt AnswerOptions) error {
 func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 	// TODO: Use setupRTPSession
 	sess := rtpSess.Sess
-	sdp := d.InviteRequest.Body()
-	if sdp == nil {
+	sdpBody := d.InviteRequest.Body()
+	if sdpBody == nil {
 		return fmt.Errorf("no sdp present in INVITE")
 	}
 
-	if err := sess.RemoteSDP(sdp); err != nil {
-		return err
+	// Parse SDP to check for audio and video
+	sd := sdp.SessionDescription{}
+	if err := sdp.Unmarshal(sdpBody, &sd); err != nil {
+		return fmt.Errorf("failed to parse SDP: %w", err)
+	}
+
+	// Update session based on its media type
+	// Check if session matches the media type in SDP
+	mediaType := sess.MediaType
+	if mediaType == "" {
+		mediaType = "audio" // Default
+	}
+
+	_, err := sd.MediaDescription(mediaType)
+	if err == nil {
+		// Media type is present in SDP
+		if err := sess.RemoteSDP(sdpBody); err != nil {
+			return fmt.Errorf("failed to apply %s SDP: %w", mediaType, err)
+		}
 	}
 
 	d.mu.Lock()
@@ -190,9 +250,47 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 	})
 	d.mu.Unlock()
 
+	// Update video session if it exists and video is in SDP
+	if d.videoMediaSession != nil {
+		_, err := sd.MediaDescription("video")
+		if err == nil {
+			// Video is present in SDP
+			if err := d.videoMediaSession.RemoteSDP(sdpBody); err != nil {
+				return fmt.Errorf("failed to apply video SDP: %w", err)
+			}
+
+			videoRtpSess := media.NewRTPSession(d.videoMediaSession)
+			d.mu.Lock()
+			d.videoRtpSession = videoRtpSess
+			d.VideoRTPPacketReader = media.NewRTPPacketReaderSession(videoRtpSess)
+			d.VideoRTPPacketWriter = media.NewRTPPacketWriterSession(videoRtpSess)
+			d.onCloseUnsafe(func() error {
+				return videoRtpSess.Close()
+			})
+			d.mu.Unlock()
+
+			// Must be called after reader and writer setup due to race
+			if err := videoRtpSess.MonitorBackground(); err != nil {
+				return err
+			}
+		}
+	}
+
 	// This will now block until ACK received with 64*T1 as max.
 	// How to let caller to cancel this?
-	if err := d.RespondSDP(sess.LocalSDP()); err != nil {
+	// Combine audio and video SDP if both exist
+	var localSDP []byte
+	if sess != nil && d.videoMediaSession != nil {
+		sessions := []*media.MediaSession{sess, d.videoMediaSession}
+		localSDP = media.CombineSDP(sessions)
+	} else if d.videoMediaSession != nil {
+		localSDP = d.videoMediaSession.LocalSDP()
+	} else if sess != nil {
+		localSDP = sess.LocalSDP()
+	} else {
+		return fmt.Errorf("no media session available")
+	}
+	if err := d.RespondSDP(localSDP); err != nil {
 		return err
 	}
 	// Must be called after media and reader writer is setup
@@ -201,13 +299,24 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 
 func (d *DialogServerSession) setupRTPSession(rtpSess *media.RTPSession) error {
 	sess := rtpSess.Sess
-	sdp := d.InviteRequest.Body()
-	if sdp == nil {
+	sdpBody := d.InviteRequest.Body()
+	if sdpBody == nil {
 		return fmt.Errorf("no sdp present in INVITE")
 	}
 
-	if err := sess.RemoteSDP(sdp); err != nil {
-		return err
+	// Parse SDP to check for audio
+	sd := sdp.SessionDescription{}
+	if err := sdp.Unmarshal(sdpBody, &sd); err != nil {
+		return fmt.Errorf("failed to parse SDP: %w", err)
+	}
+
+	// Update audio session if audio is in SDP
+	_, err := sd.MediaDescription("audio")
+	if err == nil {
+		// Audio is present in SDP
+		if err := sess.RemoteSDP(sdpBody); err != nil {
+			return err
+		}
 	}
 
 	d.mu.Lock()
@@ -239,7 +348,14 @@ func (d *DialogServerSession) AnswerLate() error {
 
 	// This will now block until ACK received with 64*T1 as max.
 	// How to let caller to cancel this?
-	if err := d.RespondSDP(localSDP); err != nil {
+	var sdpBody []byte
+	if d.videoMediaSession != nil {
+		sessions := []*media.MediaSession{sess, d.videoMediaSession}
+		sdpBody = media.CombineSDP(sessions)
+	} else {
+		sdpBody = localSDP
+	}
+	if err := d.RespondSDP(sdpBody); err != nil {
 		return err
 	}
 	// Must be called after media and reader writer is setup
@@ -262,8 +378,22 @@ func (d *DialogServerSession) ReadAck(req *sip.Request, tx sip.ServerTransaction
 		body := req.Body()
 		if body != nil && contentType.Value() == "application/sdp" {
 			// This is Late offer response
-			if err := sess.RemoteSDP(body); err != nil {
-				return err
+			// Parse SDP to check for audio
+			sd := sdp.SessionDescription{}
+			if err := sdp.Unmarshal(body, &sd); err == nil {
+				// Check if audio is in SDP
+				_, err := sd.MediaDescription("audio")
+				if err == nil {
+					// Audio is present in SDP
+					if err := sess.RemoteSDP(body); err != nil {
+						return err
+					}
+				}
+			} else {
+				// Fallback: try to apply SDP anyway (for backward compatibility)
+				if err := sess.RemoteSDP(body); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -285,11 +415,21 @@ func (d *DialogServerSession) Hangup(ctx context.Context) error {
 }
 
 func (d *DialogServerSession) ReInvite(ctx context.Context) error {
-	sdp := d.mediaSession.LocalSDP()
+	var sdpBody []byte
+	if d.mediaSession != nil && d.videoMediaSession != nil {
+		sessions := []*media.MediaSession{d.mediaSession, d.videoMediaSession}
+		sdpBody = media.CombineSDP(sessions)
+	} else if d.videoMediaSession != nil {
+		sdpBody = d.videoMediaSession.LocalSDP()
+	} else if d.mediaSession != nil {
+		sdpBody = d.mediaSession.LocalSDP()
+	} else {
+		return fmt.Errorf("no media session available")
+	}
 	contact := d.RemoteContact()
 	req := sip.NewRequest(sip.INVITE, contact.Address)
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-	req.SetBody(sdp)
+	req.SetBody(sdpBody)
 
 	res, err := d.Do(ctx, req)
 	if err != nil {

@@ -20,6 +20,14 @@ var (
 	CodecAudioAlaw          = Codec{PayloadType: 8, SampleRate: 8000, SampleDur: 20 * time.Millisecond, NumChannels: 1, Name: "PCMA"}
 	CodecAudioOpus          = Codec{PayloadType: 96, SampleRate: 48000, SampleDur: 20 * time.Millisecond, NumChannels: 2, Name: "opus"}
 	CodecTelephoneEvent8000 = Codec{PayloadType: 101, SampleRate: 8000, SampleDur: 20 * time.Millisecond, NumChannels: 1, Name: "telephone-event"}
+
+	// Video codecs
+	// H.264 is the most common video codec for SIP
+	CodecVideoH264 = Codec{PayloadType: 96, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "H264"}
+	// VP8 is commonly used in WebRTC
+	CodecVideoVP8 = Codec{PayloadType: 97, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "VP8"}
+	// VP9 is a newer codec
+	CodecVideoVP9 = Codec{PayloadType: 98, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "VP9"}
 )
 
 type Codec struct {
@@ -63,6 +71,10 @@ func CodecAudioFromList(codecs []Codec) (Codec, bool) {
 		if codec.Name == "telephone-event" {
 			continue
 		}
+		// Skip video codecs
+		if codec.Name == "H264" || codec.Name == "VP8" || codec.Name == "VP9" {
+			continue
+		}
 
 		return codec, true
 	}
@@ -93,7 +105,7 @@ func CodecAudioFromPayloadType(payloadType uint8) (Codec, error) {
 	case sdp.FORMAT_TYPE_TELEPHONE_EVENT:
 		return CodecTelephoneEvent8000, nil
 	}
-	return Codec{}, fmt.Errorf("non supported codec: %d", payloadType)
+	return Codec{}, fmt.Errorf("non supported audio codec: %d", payloadType)
 }
 
 func mapSupportedCodec(f string) Codec {
@@ -116,6 +128,7 @@ func mapSupportedCodec(f string) Codec {
 	if err != nil {
 		slog.Warn("Format is non numeric value", "format", f)
 	}
+	// Default to audio codec (8000 Hz)
 	return Codec{
 		PayloadType: pt,
 		SampleRate:  8000,

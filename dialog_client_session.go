@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/c2pc/diago/media"
+	"github.com/c2pc/diago/media/sdp"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )
@@ -157,9 +158,22 @@ func (d *DialogClientSession) Invite(ctx context.Context, opts InviteClientOptio
 		// Check ContentType and body present
 		contType := origInvite.ContentType()
 		if body := origInvite.Body(); body != nil && (contType != nil && contType.Value() == "application/sdp") {
-			// apply remote SDP
-			if err := sess.RemoteSDP(body); err != nil {
-				return fmt.Errorf("failed to apply originator sdp: %w", err)
+			// Parse SDP to check for audio
+			sd := sdp.SessionDescription{}
+			if err := sdp.Unmarshal(body, &sd); err == nil {
+				// Check if audio is in SDP
+				_, err := sd.MediaDescription("audio")
+				if err == nil {
+					// Audio is present in SDP
+					if err := sess.RemoteSDP(body); err != nil {
+						return fmt.Errorf("failed to apply originator sdp: %w", err)
+					}
+				}
+			} else {
+				// Fallback: try to apply SDP anyway (for backward compatibility)
+				if err := sess.RemoteSDP(body); err != nil {
+					return fmt.Errorf("failed to apply originator sdp: %w", err)
+				}
 			}
 			// We do not want originator to be remote side, but we want to apply codec filtering
 			sess.SetRemoteAddr(&net.UDPAddr{})
@@ -210,7 +224,19 @@ func (d *DialogClientSession) Invite(ctx context.Context, opts InviteClientOptio
 	dialogCli := d.UA
 	inviteReq.AppendHeader(&dialogCli.ContactHDR)
 	inviteReq.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-	inviteReq.SetBody(sess.LocalSDP())
+	// Combine audio and video SDP if both exist
+	var sdpBody []byte
+	if sess != nil && d.videoMediaSession != nil {
+		sessions := []*media.MediaSession{sess, d.videoMediaSession}
+		sdpBody = media.CombineSDP(sessions)
+	} else if d.videoMediaSession != nil {
+		sdpBody = d.videoMediaSession.LocalSDP()
+	} else if sess != nil {
+		sdpBody = sess.LocalSDP()
+	} else {
+		return fmt.Errorf("no media session available")
+	}
+	inviteReq.SetBody(sdpBody)
 
 	// We allow changing full from header, but we need to make sure it is correctly set
 	if fromHDR := inviteReq.From(); fromHDR != nil {
@@ -289,21 +315,76 @@ func (d *DialogClientSession) waitAnswerEarly(ctx context.Context, opts sipgo.An
 			return nil
 		}
 
-		if err := sess.RemoteSDP(remoteSDP); err != nil {
-			return err
-		}
+		// Parse SDP to check for audio and video
+		sd := sdp.SessionDescription{}
+		if err := sdp.Unmarshal(remoteSDP, &sd); err != nil {
+			// Fallback to old behavior
+			if err := sess.RemoteSDP(remoteSDP); err != nil {
+				return err
+			}
 
-		rtpSess := media.NewRTPSession(sess)
-		d.mu.Lock()
-		d.initRTPSessionUnsafe(sess, rtpSess)
-		d.onCloseUnsafe(func() error {
-			return rtpSess.Close()
-		})
-		d.mu.Unlock()
+			rtpSess := media.NewRTPSession(sess)
+			d.mu.Lock()
+			d.initRTPSessionUnsafe(sess, rtpSess)
+			d.onCloseUnsafe(func() error {
+				return rtpSess.Close()
+			})
+			d.mu.Unlock()
 
-		// Must be called after reader and writer setup due to race
-		if err := rtpSess.MonitorBackground(); err != nil {
-			return err
+			// Must be called after reader and writer setup due to race
+			if err := rtpSess.MonitorBackground(); err != nil {
+				return err
+			}
+		} else {
+			// Update audio session if it exists and audio is in SDP
+			if sess != nil {
+				_, err := sd.MediaDescription("audio")
+				if err == nil {
+					// Audio is present in SDP
+					if err := sess.RemoteSDP(remoteSDP); err != nil {
+						return err
+					}
+
+					rtpSess := media.NewRTPSession(sess)
+					d.mu.Lock()
+					d.initRTPSessionUnsafe(sess, rtpSess)
+					d.onCloseUnsafe(func() error {
+						return rtpSess.Close()
+					})
+					d.mu.Unlock()
+
+					// Must be called after reader and writer setup due to race
+					if err := rtpSess.MonitorBackground(); err != nil {
+						return err
+					}
+				}
+			}
+
+			// Update video session if it exists and video is in SDP
+			if d.videoMediaSession != nil {
+				_, err := sd.MediaDescription("video")
+				if err == nil {
+					// Video is present in SDP
+					if err := d.videoMediaSession.RemoteSDP(remoteSDP); err != nil {
+						return fmt.Errorf("failed to apply video SDP: %w", err)
+					}
+
+					videoRtpSess := media.NewRTPSession(d.videoMediaSession)
+					d.mu.Lock()
+					d.videoRtpSession = videoRtpSess
+					d.VideoRTPPacketReader = media.NewRTPPacketReaderSession(videoRtpSess)
+					d.VideoRTPPacketWriter = media.NewRTPPacketWriterSession(videoRtpSess)
+					d.onCloseUnsafe(func() error {
+						return videoRtpSess.Close()
+					})
+					d.mu.Unlock()
+
+					// Must be called after reader and writer setup due to race
+					if err := videoRtpSess.MonitorBackground(); err != nil {
+						return err
+					}
+				}
+			}
 		}
 
 		return ErrClientEarlyMedia
@@ -338,21 +419,64 @@ func (d *DialogClientSession) applyRemoteSDP() error {
 		return err
 	}
 
-	if err := sess.RemoteSDP(remoteSDP); err != nil {
-		return err
+	// Parse SDP to check for audio and video
+	sd := sdp.SessionDescription{}
+	if err := sdp.Unmarshal(remoteSDP, &sd); err != nil {
+		return fmt.Errorf("failed to parse SDP: %w", err)
 	}
 
-	// Create RTP session. After this no media session configuration should be changed
-	rtpSess := media.NewRTPSession(sess)
-	d.mu.Lock()
-	d.initRTPSessionUnsafe(sess, rtpSess)
-	d.onCloseUnsafe(func() error {
-		return rtpSess.Close()
-	})
-	d.mu.Unlock()
+	// Update audio session if it exists and audio is in SDP
+	if sess != nil {
+		_, err := sd.MediaDescription("audio")
+		if err == nil {
+			// Audio is present in SDP
+			if err := sess.RemoteSDP(remoteSDP); err != nil {
+				return fmt.Errorf("failed to apply audio SDP: %w", err)
+			}
 
-	// Must be called after reader and writer setup due to race
-	return rtpSess.MonitorBackground()
+			// Create RTP session. After this no media session configuration should be changed
+			rtpSess := media.NewRTPSession(sess)
+			d.mu.Lock()
+			d.initRTPSessionUnsafe(sess, rtpSess)
+			d.onCloseUnsafe(func() error {
+				return rtpSess.Close()
+			})
+			d.mu.Unlock()
+
+			// Must be called after reader and writer setup due to race
+			if err := rtpSess.MonitorBackground(); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Update video session if it exists and video is in SDP
+	if d.videoMediaSession != nil {
+		_, err := sd.MediaDescription("video")
+		if err == nil {
+			// Video is present in SDP
+			if err := d.videoMediaSession.RemoteSDP(remoteSDP); err != nil {
+				return fmt.Errorf("failed to apply video SDP: %w", err)
+			}
+
+			videoRtpSess := media.NewRTPSession(d.videoMediaSession)
+			d.mu.Lock()
+			d.videoRtpSession = videoRtpSess
+			d.VideoRTPPacketReader = media.NewRTPPacketReaderSession(videoRtpSess)
+			d.VideoRTPPacketWriter = media.NewRTPPacketWriterSession(videoRtpSess)
+			d.onCloseUnsafe(func() error {
+				return videoRtpSess.Close()
+			})
+			d.mu.Unlock()
+
+			// Must be called after reader and writer setup due to race
+			if err := videoRtpSess.MonitorBackground(); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // Ack acknowledgeds media
@@ -400,13 +524,25 @@ func (d *DialogClientSession) ack(ctx context.Context, body []byte) error {
 // ReInvite sends new invite based on current media session
 func (d *DialogClientSession) ReInvite(ctx context.Context) error {
 	d.mu.Lock()
-	sdp := d.mediaSession.LocalSDP()
+	// Combine audio and video SDP if both exist
+	var sdpBody []byte
+	if d.mediaSession != nil && d.videoMediaSession != nil {
+		sessions := []*media.MediaSession{d.mediaSession, d.videoMediaSession}
+		sdpBody = media.CombineSDP(sessions)
+	} else if d.videoMediaSession != nil {
+		sdpBody = d.videoMediaSession.LocalSDP()
+	} else if d.mediaSession != nil {
+		sdpBody = d.mediaSession.LocalSDP()
+	} else {
+		d.mu.Unlock()
+		return fmt.Errorf("no media session available")
+	}
 	contact := d.remoteContactUnsafe()
 	d.mu.Unlock()
 	req := sip.NewRequest(sip.INVITE, contact.Address)
 	req.AppendHeader(d.InviteRequest.Contact())
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-	req.SetBody(sdp)
+	req.SetBody(sdpBody)
 
 	res, err := d.Do(ctx, req)
 	if err != nil {

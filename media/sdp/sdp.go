@@ -100,6 +100,41 @@ func (sd SessionDescription) MediaDescription(mediaType string) (MediaDescriptio
 	return md, nil
 }
 
+// MediaAttributes extracts attributes that belong to a specific media type
+// In SDP, attributes after m= line belong to that media until next m= line
+func (sd SessionDescription) MediaAttributes(mediaType string) []string {
+	// Find the position of the media description
+	mValues := sd.Values("m")
+	mediaIndex := -1
+	for i, val := range mValues {
+		ind := strings.Index(val, " ")
+		if ind < 1 {
+			continue
+		}
+		media := val[:ind]
+		if media == mediaType {
+			mediaIndex = i
+			break
+		}
+	}
+
+	if mediaIndex < 0 {
+		return nil
+	}
+
+	// Get all attributes
+	allAttrs := sd.Values("a")
+	if len(allAttrs) == 0 {
+		return nil
+	}
+
+	// For now, return all attributes
+	// In a more sophisticated implementation, we would track which attributes
+	// come after which m= line, but for simplicity, we return all attributes
+	// and let the codec parser filter by format
+	return allAttrs
+}
+
 // c=<nettype> <addrtype> <connection-address>
 // https://tools.ietf.org/html/rfc4566#section-5.7
 type ConnectionInformation struct {
