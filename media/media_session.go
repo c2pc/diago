@@ -1098,7 +1098,6 @@ func CombineSDP(sessions []*MediaSession) []byte {
 		hasMode := false
 		hasPtime := false
 		hasMaxptime := false
-		hasCrypto := false
 
 		for _, line := range lines {
 			if strings.HasPrefix(line, "m="+mediaType+" ") {
@@ -1119,10 +1118,8 @@ func CombineSDP(sessions []*MediaSession) []byte {
 						hasPtime = true
 					} else if strings.HasPrefix(attr, "maxptime:") {
 						hasMaxptime = true
-					} else if strings.HasPrefix(attr, "crypto:") {
-						hasCrypto = true
 					}
-					// Add all attributes (rtpmap, fmtp, etc.)
+					// Add all attributes (rtpmap, fmtp, crypto, etc.)
 					s = append(s, line)
 				}
 			}
