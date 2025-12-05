@@ -234,6 +234,14 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 		mediaType = "audio" // Default
 	}
 
+	// Ensure session is initialized (port is set)
+	if sess.Laddr.Port == 0 {
+		// Session not initialized, try to initialize it
+		if err := sess.Init(); err != nil {
+			return fmt.Errorf("failed to initialize %s session: %w", mediaType, err)
+		}
+	}
+
 	_, err := sd.MediaDescription(mediaType)
 	if err == nil {
 		// Media type is present in SDP
@@ -268,6 +276,15 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 			// For now, we'll skip video if not configured
 			// The video session will be created in sdpUpdateUnsafe if needed
 		} else {
+			// Ensure video session is initialized (port is set)
+			if d.videoMediaSession.Laddr.Port == 0 {
+				// Session not initialized, try to initialize it
+				if err := d.videoMediaSession.Init(); err != nil {
+					// If video session fails to initialize, continue with audio only
+					// but log the error
+				}
+			}
+
 			// Video session exists, update it
 			if err := d.videoMediaSession.RemoteSDP(sdpBody); err != nil {
 				// If no supported video codecs found, we should still try to answer

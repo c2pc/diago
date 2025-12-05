@@ -310,6 +310,32 @@ func (s *MediaSession) LocalSDP() []byte {
 		connIP = ip
 	}
 
+	// If port is 0, media is not initialized - this should not happen
+	// But if it does, we should return an error or use a default port
+	// For now, we'll check if rtpConn exists and get port from it
+	if rtpPort == 0 {
+		if s.rtpConn != nil {
+			if laddr := s.rtpConn.LocalAddr(); laddr != nil {
+				if udpAddr, ok := laddr.(*net.UDPAddr); ok {
+					rtpPort = udpAddr.Port
+					s.Laddr.Port = rtpPort
+				}
+			}
+		}
+		// If still 0, try to initialize the session
+		if rtpPort == 0 {
+			if err := s.Init(); err == nil {
+				rtpPort = s.Laddr.Port
+			}
+		}
+		// If still 0, this is an error - media session is not properly initialized
+		if rtpPort == 0 {
+			// Return error SDP with port 0 and inactive mode
+			// This will signal that media is not available
+			return generateSDP(mediaType, rtpProfile, ip, connIP, 0, "inactive", codecs, localSDES)
+		}
+	}
+
 	// https://datatracker.ietf.org/doc/html/rfc3264#section-6.1
 	// 	Although the answerer MAY list the formats in their desired order of
 	//    preference, it is RECOMMENDED that unless there is a specific reason,
@@ -943,7 +969,7 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 			"a=maxptime:20")
 	}
 
-	s = append(s, "a="+string(mode))
+	s = append(s, "a="+mode)
 
 	if sdes.alg != "" {
 		s = append(s, fmt.Sprintf("a=crypto:%d %s inline:%s", sdes.tag, sdes.alg, sdes.base64))
