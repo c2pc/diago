@@ -231,12 +231,19 @@ func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (i
 					continue
 				}
 
+				// Determine SampleDur based on codec type
+				// Video codecs typically use 33ms frame duration
+				// Audio codecs typically use 20ms packet duration
+				sampleDur := 20 * time.Millisecond
+				if encodingName == "H264" || encodingName == "VP8" || encodingName == "VP9" {
+					sampleDur = 33 * time.Millisecond
+				}
+
 				codec := Codec{
 					Name:        encodingName,
 					PayloadType: pt,
 					SampleRate:  uint32(sampleRate64),
-					// TODO check ptime ?
-					SampleDur:   20 * time.Millisecond,
+					SampleDur:   sampleDur,
 					NumChannels: 1,
 				}
 
