@@ -782,6 +782,15 @@ func (m *MediaSession) getWriteBuf() []byte {
 }
 
 func (m *MediaSession) WriteRTPRaw(data []byte) (n int, err error) {
+	if m.rtpConn == nil {
+		return 0, fmt.Errorf("RTP connection is not initialized")
+	}
+	if m.Raddr.IP == nil {
+		return 0, fmt.Errorf("remote address (Raddr) is not set for %s session", m.MediaType)
+	}
+	if m.Raddr.Port == 0 {
+		return 0, fmt.Errorf("remote port (Raddr.Port) is not set for %s session", m.MediaType)
+	}
 	n, err = m.rtpConn.WriteTo(data, &m.Raddr)
 	return
 }

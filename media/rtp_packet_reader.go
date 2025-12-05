@@ -144,7 +144,13 @@ func (r *RTPPacketReader) Read(b []byte) (int, error) {
 	if r.lastSSRC == pkt.SSRC {
 		prevSeq := r.seqReader.ReadExtendedSeq()
 		if err := r.seqReader.UpdateSeq(pkt.SequenceNumber); err != nil {
-			r.log.Warn(err.Error())
+			// Duplicate packets are normal in UDP networks, log as DEBUG
+			// Bad sequence numbers might indicate a problem, log as WARN
+			if err == ErrRTPSequnceDuplicate {
+				r.log.Debug("Duplicate RTP packet received", "seq", pkt.SequenceNumber, "ssrc", pkt.SSRC)
+			} else {
+				r.log.Warn("RTP sequence error", "error", err.Error(), "seq", pkt.SequenceNumber, "ssrc", pkt.SSRC)
+			}
 		}
 
 		newSeq := r.seqReader.ReadExtendedSeq()
