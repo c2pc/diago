@@ -87,8 +87,10 @@ func NewRTPPacketWriterSession(sess *RTPSession) *RTPPacketWriter {
 	w := NewRTPPacketWriter(sess, codec)
 	// We need to add our SSRC due to sender report, which can be empty until data comes
 	// It is expected that nothing travels yet through rtp session
-	// sess.writeStats.SSRC = w.SSRC
-	// sess.writeStats.sampleRate = w.sampleRate
+	sess.rtcpMU.Lock()
+	sess.writeStats.SSRC = w.SSRC
+	sess.writeStats.sampleRate = w.sampleRate
+	sess.rtcpMU.Unlock()
 	w.writer = sess
 	return w
 }
@@ -194,6 +196,10 @@ func (w *RTPPacketWriter) UpdateRTPSession(rtpSess *RTPSession) {
 	w.sampleRate = codec.SampleRate
 	w.updateClockRate(codec)
 	w.writer = rtpSess
-	// rtpSess.writeStats.SSRC = w.SSRC
-	// rtpSess.writeStats.sampleRate = w.sampleRate
+
+	// Update RTPSession writeStats with our SSRC and sample rate
+	rtpSess.rtcpMU.Lock()
+	rtpSess.writeStats.SSRC = w.SSRC
+	rtpSess.writeStats.sampleRate = w.sampleRate
+	rtpSess.rtcpMU.Unlock()
 }
