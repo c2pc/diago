@@ -128,19 +128,45 @@ func mapSupportedCodec(f string) Codec {
 		return CodecAudioOpus
 	case sdp.FORMAT_TYPE_TELEPHONE_EVENT:
 		return CodecTelephoneEvent8000
+	// Video codecs - these are dynamic payload types, so we need to check by numeric value
+	case sdp.FORMAT_VIDEO_TYPE_H264:
+		return CodecVideoH264
+	case sdp.FORMAT_VIDEO_TYPE_VP8:
+		return CodecVideoVP8
+	case sdp.FORMAT_VIDEO_TYPE_VP9:
+		return CodecVideoVP9
 	default:
+		// Try to parse as numeric payload type
+		pt, err := sdp.FormatNumeric(f)
+		if err != nil {
+			slog.Warn("Format is non numeric value", "format", f)
+			// Return default audio codec if parsing fails
+			return CodecAudioUlaw
+		}
+
+		// Check if it's in the dynamic payload type range (96-127)
+		// This range is commonly used for video codecs, but can also be used for audio
+		// Without rtpmap, we can't determine the exact codec, so we'll use default parameters
+		// This function should ideally not be used for dynamic payload types - they should be parsed from SDP
+		if pt >= 96 && pt <= 127 {
+			// Dynamic payload type range - could be video or audio
+			// Default to video codec with 90000 Hz (common for video)
+			// Note: This is a fallback - proper codec info should come from SDP rtpmap
+			return Codec{
+				PayloadType: pt,
+				SampleRate:  90000,                 // Common video clock rate
+				SampleDur:   33 * time.Millisecond, // Common video frame duration
+				NumChannels: 1,
+			}
+		}
+
+		// Default to audio codec (8000 Hz) for static payload types
 		slog.Warn("Unsupported format. Using default clock rate", "format", f)
-	}
-	// Format as default
-	pt, err := sdp.FormatNumeric(f)
-	if err != nil {
-		slog.Warn("Format is non numeric value", "format", f)
-	}
-	// Default to audio codec (8000 Hz)
-	return Codec{
-		PayloadType: pt,
-		SampleRate:  8000,
-		SampleDur:   20 * time.Millisecond,
+		return Codec{
+			PayloadType: pt,
+			SampleRate:  8000,
+			SampleDur:   20 * time.Millisecond,
+		}
 	}
 }
 
