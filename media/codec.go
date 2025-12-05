@@ -95,11 +95,6 @@ func CodecAudioFromList(codecs []Codec) (Codec, bool) {
 	return Codec{}, false
 }
 
-// Deprecated: Use CodecAudioFromSession
-func CodecFromSession(s *MediaSession) Codec {
-	return CodecAudioFromSession(s)
-}
-
 // Deprecated: Use CodecAudioFromPayloadType
 func CodecFromPayloadType(payloadType uint8) Codec {
 	f := strconv.Itoa(int(payloadType))
