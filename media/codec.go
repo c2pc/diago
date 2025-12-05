@@ -128,14 +128,11 @@ func mapSupportedCodec(f string) Codec {
 		return CodecAudioOpus
 	case sdp.FORMAT_TYPE_TELEPHONE_EVENT:
 		return CodecTelephoneEvent8000
-	// Video codecs - these are dynamic payload types, so we need to check by numeric value
-	case sdp.FORMAT_VIDEO_TYPE_H264:
-		return CodecVideoH264
-	case sdp.FORMAT_VIDEO_TYPE_VP8:
-		return CodecVideoVP8
-	case sdp.FORMAT_VIDEO_TYPE_VP9:
-		return CodecVideoVP9
 	default:
+		// Note: Video codecs (H264, VP8, VP9) use dynamic payload types (96-127)
+		// which can overlap with audio codecs like Opus (96). We can't determine
+		// the codec type from format string alone - it should be parsed from SDP rtpmap.
+		// This function is a fallback and will use default parameters based on PayloadType range.
 		// Try to parse as numeric payload type
 		pt, err := sdp.FormatNumeric(f)
 		if err != nil {
