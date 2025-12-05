@@ -465,9 +465,24 @@ func (s *RTPSession) readRTCPPacket(pkt rtcp.Packet) {
 }
 
 func (s *RTPSession) readReceptionReport(rr rtcp.ReceptionReport, now time.Time) {
-	// For now only use single SSRC
-	if rr.SSRC != s.writeStats.SSRC {
-		DefaultLogger().Warn("Reception report SSRC does not match our internal", "ssrc", rr.SSRC, "expected", s.writeStats.SSRC)
+	// ReceptionReport.SSRC is the SSRC of the source we're receiving from (remote sender)
+	// It should match our readStats.SSRC (the SSRC we're tracking for received RTP packets)
+	// NOT writeStats.SSRC (our own SSRC that we're sending)
+	if rr.SSRC == 0 {
+		// SSRC=0 in reception report is invalid, skip it
+		DefaultLogger().Debug("Reception report with SSRC=0, skipping", "expected", s.readStats.SSRC)
+		return
+	}
+
+	// If we haven't received any RTP packets yet, we can't match SSRC
+	if s.readStats.SSRC == 0 {
+		// We'll accept this reception report and use its SSRC
+		s.readStats.SSRC = rr.SSRC
+	}
+
+	// For now only use single SSRC - match against readStats (source we're receiving from)
+	if rr.SSRC != s.readStats.SSRC {
+		DefaultLogger().Debug("Reception report SSRC does not match our tracked source", "ssrc", rr.SSRC, "expected", s.readStats.SSRC, "mediaType", s.Sess.MediaType)
 		return
 	}
 
