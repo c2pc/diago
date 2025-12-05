@@ -66,6 +66,19 @@ func CodecAudioFromSession(s *MediaSession) Codec {
 	return codec
 }
 
+// CodecFromSession returns the first codec from the session, whether audio or video
+// It prefers filterCodecs (negotiated codecs) over Codecs
+func CodecFromSession(s *MediaSession) Codec {
+	if len(s.filterCodecs) > 0 {
+		return s.filterCodecs[0]
+	}
+	if len(s.Codecs) > 0 {
+		return s.Codecs[0]
+	}
+	// Fallback to default audio codec if no codecs available
+	return CodecAudioUlaw
+}
+
 func CodecAudioFromList(codecs []Codec) (Codec, bool) {
 	for _, codec := range codecs {
 		if codec.Name == "telephone-event" {
