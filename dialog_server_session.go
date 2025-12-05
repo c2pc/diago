@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync/atomic"
 
 	"github.com/c2pc/diago/media"
@@ -286,15 +287,39 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 			}
 
 			// Video session exists, update it
-			if err := d.videoMediaSession.RemoteSDP(sdpBody); err != nil {
-				// If no supported video codecs found, we should still try to answer
-				// with audio only, but log the error
+			remoteSDPErr := d.videoMediaSession.RemoteSDP(sdpBody)
+
+			// Even if RemoteSDP returns error, we need to ensure Raddr is set
+			// if video is in SDP, otherwise ReadRTP will block
+			if remoteSDPErr != nil {
+				// Try to set Raddr manually from SDP
+				md, mdErr := sd.MediaDescription("video")
+				if mdErr == nil {
+					ci, ciErr := sd.ConnectionInformation()
+					if ciErr == nil {
+						// Set remote address even if codec negotiation failed
+						d.videoMediaSession.SetRemoteAddr(&net.UDPAddr{IP: ci.IP, Port: md.Port})
+					}
+				}
+
 				// Check if we have any video codecs at all
 				commonCodecs := d.videoMediaSession.CommonCodecs()
 				if len(d.videoMediaSession.Codecs) == 0 && len(commonCodecs) == 0 {
 					// No video codecs, continue with audio only
 				} else {
 					// We have some codecs, but negotiation failed - continue anyway
+				}
+			}
+
+			// Verify that Raddr is set before creating RTP session
+			if d.videoMediaSession.Raddr.IP == nil {
+				// Raddr not set, try to set it from SDP
+				md, mdErr := sd.MediaDescription("video")
+				if mdErr == nil {
+					ci, ciErr := sd.ConnectionInformation()
+					if ciErr == nil {
+						d.videoMediaSession.SetRemoteAddr(&net.UDPAddr{IP: ci.IP, Port: md.Port})
+					}
 				}
 			}
 
