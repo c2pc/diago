@@ -210,9 +210,21 @@ func (s *RTPSession) ReadRTP(b []byte, readPkt *rtp.Packet) (n int, err error) {
 		// We expect that SSRC only changed but MULTI RTP stream per one session is not supported
 		// NOTE: Reading codecs may be in a race while establishing session but it is expected
 		// that caller should not run reading while session is established
-		codec := s.Sess.Codecs[0]
+
+		// Use filterCodecs (negotiated codecs) if available, otherwise use Codecs
+		codecsToCheck := s.Sess.Codecs
+		if len(s.Sess.filterCodecs) > 0 {
+			codecsToCheck = s.Sess.filterCodecs
+		}
+
+		if len(codecsToCheck) == 0 {
+			DefaultLogger().Warn("No codecs available in media session", "mediaType", s.Sess.MediaType)
+			return 0, nil
+		}
+
+		codec := codecsToCheck[0]
 		if codec.PayloadType != readPkt.PayloadType {
-			for _, c := range s.Sess.Codecs {
+			for _, c := range codecsToCheck {
 				if c.PayloadType == readPkt.PayloadType {
 					codec = c
 					break
@@ -220,7 +232,7 @@ func (s *RTPSession) ReadRTP(b []byte, readPkt *rtp.Packet) (n int, err error) {
 			}
 
 			if codec.PayloadType != readPkt.PayloadType {
-				DefaultLogger().Warn("Received RTP with unsupported payload_type", "pt", readPkt.PayloadType)
+				DefaultLogger().Warn("Received RTP with unsupported payload_type", "pt", readPkt.PayloadType, "mediaType", s.Sess.MediaType, "availableCodecs", codecsToCheck)
 				return 0, nil
 			}
 		}
