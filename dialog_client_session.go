@@ -560,6 +560,22 @@ func (d *DialogClientSession) ReInvite(ctx context.Context) error {
 		return fmt.Errorf("no contact header present")
 	}
 
+	// Обновляем медиа сессии на основе ответного SDP
+	remoteSDP := res.Body()
+	if remoteSDP != nil {
+		// Используем sdpUpdateUnsafe для обновления медиа сессий
+		// Это обновит аудио и видео сессии, создаст/удалит RTP сессии
+		d.mu.Lock()
+		err := d.sdpUpdateUnsafe(remoteSDP)
+		if err == nil && d.onMediaUpdate != nil {
+			d.onMediaUpdate(&d.DialogMedia)
+		}
+		d.mu.Unlock()
+		if err != nil {
+			// Логируем ошибку, но продолжаем - не критично для ACK
+		}
+	}
+
 	ack := sip.NewRequest(sip.ACK, cont.Address)
 	return d.WriteRequest(ack)
 }

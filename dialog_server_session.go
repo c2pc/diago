@@ -273,10 +273,78 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 		// Video is present in SDP
 		if d.videoMediaSession == nil {
 			// Video session doesn't exist, but video is in SDP
-			// This means we need to create it dynamically (handled in sdpUpdateUnsafe)
-			// For now, we'll skip video if not configured
-			// The video session will be created in sdpUpdateUnsafe if needed
-		} else {
+			// Create it dynamically - parse video codecs from remote SDP
+			md, mdErr := sd.MediaDescription("video")
+			if mdErr == nil {
+				// Get attributes for video
+				attrs := sd.MediaAttributes("video")
+				if len(attrs) == 0 {
+					attrs = sd.Values("a")
+				}
+
+				// Parse codecs from SDP
+				codecs := make([]media.Codec, len(md.Formats))
+				n, codecErr := media.CodecsFromSDPRead(md.Formats, attrs, codecs)
+				if codecErr != nil || n == 0 {
+					// If we can't parse codecs, use default video codecs
+					codecs = []media.Codec{media.CodecVideoH264}
+					n = 1
+				}
+
+				// Filter only video codecs
+				videoCodecs := []media.Codec{}
+				for i := 0; i < n; i++ {
+					if codecs[i].Name == "H264" || codecs[i].Name == "VP8" || codecs[i].Name == "VP9" {
+						videoCodecs = append(videoCodecs, codecs[i])
+					}
+				}
+
+				// If no video codecs found, use default
+				if len(videoCodecs) == 0 {
+					videoCodecs = []media.Codec{media.CodecVideoH264}
+				}
+
+				// Get bind IP and settings from existing audio session
+				bindIP := net.IP{}
+				externalIP := net.IP{}
+				secureRTP := 0
+				srtpAlg := uint16(0)
+				if sess != nil {
+					bindIP = sess.Laddr.IP
+					externalIP = sess.ExternalIP
+					secureRTP = sess.SecureRTP
+					srtpAlg = sess.SRTPAlg
+				} else {
+					var resolveErr error
+					bindIP, _, resolveErr = sip.ResolveInterfacesIP("ip4", nil)
+					if resolveErr != nil {
+						// Continue without video if can't resolve IP
+						bindIP = nil
+					}
+				}
+
+				// Create video session if we have bind IP
+				if bindIP != nil {
+					videoSess := &media.MediaSession{
+						MediaType:  "video",
+						Codecs:     videoCodecs,
+						Laddr:      net.UDPAddr{IP: bindIP, Port: 0},
+						ExternalIP: externalIP,
+						Mode:       sdp.ModeSendrecv,
+						SecureRTP:  secureRTP,
+						SRTPAlg:    srtpAlg,
+					}
+
+					if initErr := videoSess.Init(); initErr == nil {
+						d.mu.Lock()
+						d.videoMediaSession = videoSess
+						d.mu.Unlock()
+					}
+				}
+			}
+		}
+
+		if d.videoMediaSession != nil {
 			// Ensure video session is initialized (port is set)
 			if d.videoMediaSession.Laddr.Port == 0 {
 				// Session not initialized, try to initialize it
