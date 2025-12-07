@@ -298,20 +298,40 @@ func NewDiago(ua *sipgo.UserAgent, opts ...DiagoOption) *Diago {
 	}))
 
 	server.OnCancel(func(req *sip.Request, tx sip.ServerTransaction) {
+		callID := req.CallID().Value()
+		// TODO:
+		fmt.Printf("[DIAGO_ON_CANCEL] Получен CANCEL: CallID=%s\n", callID)
 		// INVITE transaction should be terminated by transaction layer and 200 response will be sent
 		// In case of stateless proxy this we would need to forward
 		tx.Respond(sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Call/Transaction Does Not Exist", nil))
+		// TODO:
+		fmt.Printf("[DIAGO_ON_CANCEL] Отправлен ответ на CANCEL: CallID=%s\n", callID)
 	})
 
 	server.OnAck(errHandler(func(req *sip.Request, tx sip.ServerTransaction) error {
+		callID := req.CallID().Value()
+		from := req.From().Address.User
+		// TODO:
+		fmt.Printf("[DIAGO_ON_ACK] Получен ACK: CallID=%s, From=%s\n", callID, from)
 		d, err := dg.cache.MatchDialogServer(req)
 		if err != nil {
+			// TODO:
+			fmt.Printf("[DIAGO_ON_ACK] ОШИБКА MatchDialogServer: %v, CallID=%s, From=%s\n", err, callID, from)
 			// Normally ACK will be received if some out of dialog request is received or we responded negatively
 			// tx.Respond(sip.NewResponseFromRequest(req, sip.StatusBadRequest, err.Error(), nil))
 			return err
 		}
-
-		return d.ReadAck(req, tx)
+		// TODO:
+		fmt.Printf("[DIAGO_ON_ACK] Диалог найден, вызываем ReadAck: CallID=%s\n", callID)
+		err = d.ReadAck(req, tx)
+		if err != nil {
+			// TODO:
+			fmt.Printf("[DIAGO_ON_ACK] ОШИБКА ReadAck: %v, CallID=%s\n", err, callID)
+		} else {
+			// TODO:
+			fmt.Printf("[DIAGO_ON_ACK] УСПЕХ ReadAck: CallID=%s\n", callID)
+		}
+		return err
 	}))
 
 	server.OnBye(errHandler(func(req *sip.Request, tx sip.ServerTransaction) error {

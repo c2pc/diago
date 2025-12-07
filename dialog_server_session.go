@@ -116,8 +116,22 @@ func (d *DialogServerSession) RemoteContact() *sip.ContactHeader {
 }
 
 func (d *DialogServerSession) RespondSDP(body []byte) error {
+	callID := ""
+	if d.InviteRequest != nil {
+		callID = d.InviteRequest.CallID().Value()
+	}
+	// TODO:
+	fmt.Printf("[DIAGO_RESPOND_SDP] Отправка 200 OK: CallID=%s, SDPLength=%d\n", callID, len(body))
 	headers := []sip.Header{sip.NewHeader("Content-Type", "application/sdp")}
-	return d.DialogServerSession.Respond(200, "OK", body, headers...)
+	err := d.DialogServerSession.Respond(200, "OK", body, headers...)
+	if err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_RESPOND_SDP] ОШИБКА отправки 200 OK: %v, CallID=%s\n", err, callID)
+	} else {
+		// TODO:
+		fmt.Printf("[DIAGO_RESPOND_SDP] УСПЕХ отправки 200 OK: CallID=%s\n", callID)
+	}
+	return err
 }
 
 // Answer creates media session and answers
@@ -163,6 +177,12 @@ type AnswerOptions struct {
 //
 // NOTE: API may change
 func (d *DialogServerSession) AnswerOptions(opt AnswerOptions) error {
+	callID := ""
+	if d.InviteRequest != nil {
+		callID = d.InviteRequest.CallID().Value()
+	}
+	// TODO:
+	fmt.Printf("[DIAGO_ANSWER_OPTIONS] Начало AnswerOptions: CallID=%s, HasAudio=%v, HasVideo=%v\n", callID, d.mediaSession != nil, d.videoMediaSession != nil)
 	d.mu.Lock()
 	d.onReferDialog = opt.OnRefer
 	d.onMediaUpdate = opt.OnMediaUpdate
@@ -170,6 +190,8 @@ func (d *DialogServerSession) AnswerOptions(opt AnswerOptions) error {
 
 	// If media exists as early, only respond 200
 	if d.mediaSession != nil || d.videoMediaSession != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] Медиа сессии уже существуют, отправляем 200 OK: HasAudio=%v, HasVideo=%v, CallID=%s\n", d.mediaSession != nil, d.videoMediaSession != nil, callID)
 		// Check do codecs match
 		var sdpBody []byte
 		if d.mediaSession != nil && d.videoMediaSession != nil {
@@ -181,23 +203,37 @@ func (d *DialogServerSession) AnswerOptions(opt AnswerOptions) error {
 			sdpBody = d.mediaSession.LocalSDP()
 		}
 		if err := d.RespondSDP(sdpBody); err != nil {
+			// TODO:
+			fmt.Printf("[DIAGO_ANSWER_OPTIONS] ОШИБКА отправки 200 OK: %v, CallID=%s\n", err, callID)
 			return err
 		}
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] 200 OK отправлен (early media), CallID=%s\n", callID)
 		return nil
 	}
 
+	// TODO:
+	fmt.Printf("[DIAGO_ANSWER_OPTIONS] Медиа сессии не существуют, создаем через initMediaSessionFromConf: CallID=%s\n", callID)
 	// Let override of formats
 	conf := d.mediaConf
 	if opt.Codecs != nil {
 		conf.Codecs = opt.Codecs
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] Переопределены кодеки: Count=%d, CallID=%s\n", len(opt.Codecs), callID)
 	}
 
 	if err := d.initMediaSessionFromConf(conf); err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] ОШИБКА initMediaSessionFromConf: %v, CallID=%s\n", err, callID)
 		return err
 	}
+	// TODO:
+	fmt.Printf("[DIAGO_ANSWER_OPTIONS] Медиа сессии созданы: HasAudio=%v, HasVideo=%v, CallID=%s\n", d.mediaSession != nil, d.videoMediaSession != nil, callID)
 
 	// Check if we have at least one media session
 	if d.mediaSession == nil && d.videoMediaSession == nil {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] ОШИБКА: нет медиа сессий, CallID=%s\n", callID)
 		return fmt.Errorf("no media session available")
 	}
 
@@ -205,28 +241,54 @@ func (d *DialogServerSession) AnswerOptions(opt AnswerOptions) error {
 	var rtpSess *media.RTPSession
 	if d.mediaSession != nil {
 		rtpSess = media.NewRTPSession(d.mediaSession)
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] Используем аудио сессию для RTP, CallID=%s\n", callID)
 	} else if d.videoMediaSession != nil {
 		rtpSess = media.NewRTPSession(d.videoMediaSession)
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] Используем видео сессию для RTP, CallID=%s\n", callID)
 	}
 
-	return d.answerSession(rtpSess)
+	// TODO:
+	fmt.Printf("[DIAGO_ANSWER_OPTIONS] Вызов answerSession, CallID=%s\n", callID)
+	err := d.answerSession(rtpSess)
+	if err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] ОШИБКА answerSession: %v, CallID=%s\n", err, callID)
+	} else {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_OPTIONS] УСПЕХ answerSession, CallID=%s\n", callID)
+	}
+	return err
 }
 
 // answerSession. It allows answering with custom RTP Session.
 // NOTE: Not final API
 func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
+	callID := ""
+	if d.InviteRequest != nil {
+		callID = d.InviteRequest.CallID().Value()
+	}
+	// TODO:
+	fmt.Printf("[DIAGO_ANSWER_SESSION] Начало answerSession: CallID=%s, MediaType=%s\n", callID, rtpSess.Sess.MediaType)
 	// TODO: Use setupRTPSession
 	sess := rtpSess.Sess
 	sdpBody := d.InviteRequest.Body()
 	if sdpBody == nil {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_SESSION] ОШИБКА: нет SDP в INVITE, CallID=%s\n", callID)
 		return fmt.Errorf("no sdp present in INVITE")
 	}
 
 	// Parse SDP to check for audio and video
 	sd := sdp.SessionDescription{}
 	if err := sdp.Unmarshal(sdpBody, &sd); err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_SESSION] ОШИБКА парсинга SDP: %v, CallID=%s\n", err, callID)
 		return fmt.Errorf("failed to parse SDP: %w", err)
 	}
+	// TODO:
+	fmt.Printf("[DIAGO_ANSWER_SESSION] SDP распарсен: CallID=%s, SDPLength=%d\n", callID, len(sdpBody))
 
 	// Update session based on its media type
 	// Check if session matches the media type in SDP
@@ -270,8 +332,12 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 	// Also create video session if video is in SDP but not in our config
 	_, err = sd.MediaDescription("video")
 	if err == nil {
+		// TODO:
+		fmt.Printf("[DIAGO_ANSWER_SESSION] Видео найдено в SDP: CallID=%s, HasVideoSession=%v\n", callID, d.videoMediaSession != nil)
 		// Video is present in SDP
 		if d.videoMediaSession == nil {
+			// TODO:
+			fmt.Printf("[DIAGO_ANSWER_SESSION] Видео сессии нет, создаем динамически: CallID=%s\n", callID)
 			// Video session doesn't exist, but video is in SDP
 			// Create it dynamically - parse video codecs from remote SDP
 			md, mdErr := sd.MediaDescription("video")
@@ -501,12 +567,16 @@ func (d *DialogServerSession) AnswerLate() error {
 }
 
 func (d *DialogServerSession) ReadAck(req *sip.Request, tx sip.ServerTransaction) error {
+	// TODO:
+	fmt.Printf("[DIAGO_ACK] Получен ACK запрос: CallID=%s, From=%s\n", req.CallID().Value(), req.From().Address.User)
 	// Check do we have some session
 	err := func() error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		sess := d.mediaSession
 		if sess == nil {
+			// TODO:
+			fmt.Printf("[DIAGO_ACK] mediaSession == nil, пропускаем обработку SDP в ACK\n")
 			return nil
 		}
 		contentType := req.ContentType()
