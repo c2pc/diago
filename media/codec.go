@@ -253,10 +253,16 @@ func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (i
 						codec.NumChannels = int(numChannels)
 					}
 				}
+				// Проверяем границы массива перед записью
+				if n >= len(codecsAudio) {
+					rerr = errors.Join(rerr, fmt.Errorf("codecs array overflow: tried to write at index %d but array size is %d", n, len(codecsAudio)))
+					break // Прерываем внутренний цикл по attrs
+				}
 				codecsAudio[n] = codec
 				n++
+				break // Прерываем цикл по attrs после первого совпадения для этого формата
 			}
 		}
 	}
-	return n, nil
+	return n, rerr
 }

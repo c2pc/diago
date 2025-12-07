@@ -283,12 +283,18 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 				}
 
 				// Parse codecs from SDP
-				codecs := make([]media.Codec, len(md.Formats))
+				// Создаем массив с запасом, так как CodecsFromSDPRead может попытаться записать больше элементов
+				// если есть динамические кодеки
+				maxCodecs := len(md.Formats) + 4 // Запас для динамических кодеков
+				codecs := make([]media.Codec, maxCodecs)
 				n, codecErr := media.CodecsFromSDPRead(md.Formats, attrs, codecs)
 				if codecErr != nil || n == 0 {
 					// If we can't parse codecs, use default video codecs
 					codecs = []media.Codec{media.CodecVideoH264}
 					n = 1
+				} else if n > maxCodecs {
+					// На всякий случай ограничиваем n размером массива
+					n = maxCodecs
 				}
 
 				// Filter only video codecs
