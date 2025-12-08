@@ -441,15 +441,17 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 	codecs := make([]Codec, len(md.Formats))
 	// Get attributes for this specific media type
 	// ВАЖНО: используем только атрибуты для текущего медиа типа, чтобы не смешивать аудио и видео кодеки
-	attrs := sd.MediaAttributes(mediaType)
+	// Проблема: MediaAttributes возвращает все атрибуты, а не только для конкретного медиа типа
+	// Поэтому парсим SDP построчно, чтобы найти атрибуты только для текущего медиа блока
+	attrs := getMediaAttributesFromSDP(sdpReceived, mediaType)
 	if len(attrs) == 0 {
-		// Если MediaAttributes возвращает пустой список, это может означать, что атрибуты на уровне сессии
-		// Но для видео мы не должны использовать атрибуты из аудио блока
-		// Поэтому фильтруем атрибуты по медиа типу вручную
-		allAttrs := sd.Values("a")
-		// Фильтруем атрибуты: оставляем только те, которые относятся к текущему медиа типу
-		// или являются общими (не содержат PayloadType)
-		attrs = filterAttributesByMediaType(allAttrs, mediaType, md.Formats)
+		// Fallback: если не удалось найти атрибуты построчно, используем MediaAttributes
+		attrs = sd.MediaAttributes(mediaType)
+		if len(attrs) == 0 {
+			// Если MediaAttributes возвращает пустой список, фильтруем все атрибуты по форматам
+			allAttrs := sd.Values("a")
+			attrs = filterAttributesByMediaType(allAttrs, mediaType, md.Formats)
+		}
 	}
 	n, err := CodecsFromSDPRead(md.Formats, attrs, codecs)
 	if err != nil {
@@ -577,8 +579,51 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 	return len(s.filterCodecs)
 }
 
-// filterAttributesByMediaType фильтрует атрибуты SDP, оставляя только те, которые относятся к указанному медиа типу
+// getMediaAttributesFromSDP парсит SDP построчно и возвращает только атрибуты для указанного медиа типа
 // Это нужно, чтобы при парсинге видео сессии не использовать атрибуты из аудио блока
+// (например, если и audio и video используют PayloadType=96, нужно использовать правильный атрибут)
+func getMediaAttributesFromSDP(sdpData []byte, mediaType string) []string {
+	lines := strings.Split(string(sdpData), "\r\n")
+	if len(lines) == 1 {
+		lines = strings.Split(string(sdpData), "\n")
+	}
+
+	var attrs []string
+	inTargetMedia := false
+
+	for _, line := range lines {
+		// Проверяем начало медиа блока
+		if strings.HasPrefix(line, "m=") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				currentMediaType := parts[1]
+				inTargetMedia = (currentMediaType == mediaType)
+			} else {
+				inTargetMedia = false
+			}
+			continue
+		}
+
+		// Если мы в нужном медиа блоке, собираем атрибуты
+		if inTargetMedia && strings.HasPrefix(line, "a=") {
+			// Убираем префикс "a=" для совместимости с CodecsFromSDPRead
+			attr := strings.TrimPrefix(line, "a=")
+			attrs = append(attrs, attr)
+		} else if inTargetMedia && !strings.HasPrefix(line, "a=") && strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "c=") {
+			// Если встретили не-атрибут (например, b=), но мы все еще в нужном медиа блоке,
+			// это нормально - продолжаем собирать атрибуты
+			continue
+		} else if strings.HasPrefix(line, "m=") {
+			// Встретили следующий медиа блок - выходим
+			break
+		}
+	}
+
+	return attrs
+}
+
+// filterAttributesByMediaType фильтрует атрибуты SDP, оставляя только те, которые относятся к указанному медиа типу
+// Это fallback метод, если построчный парсинг не сработал
 func filterAttributesByMediaType(allAttrs []string, mediaType string, formats []string) []string {
 	if len(allAttrs) == 0 {
 		return allAttrs
@@ -593,31 +638,33 @@ func filterAttributesByMediaType(allAttrs []string, mediaType string, formats []
 	filtered := make([]string, 0, len(allAttrs))
 	for _, attr := range allAttrs {
 		// Атрибуты, которые не содержат PayloadType, оставляем (они общие)
-		if !strings.HasPrefix(attr, "a=rtpmap:") && !strings.HasPrefix(attr, "a=fmtp:") {
-			filtered = append(filtered, attr)
+		// Убираем префикс "a=" если он есть (для совместимости)
+		attrClean := strings.TrimPrefix(attr, "a=")
+		if !strings.HasPrefix(attrClean, "rtpmap:") && !strings.HasPrefix(attrClean, "fmtp:") {
+			filtered = append(filtered, attrClean)
 			continue
 		}
 
 		// Для rtpmap и fmtp проверяем, относится ли PayloadType к текущему медиа типу
-		// Формат: a=rtpmap:<payload> или a=fmtp:<payload>
-		colonIdx := strings.Index(attr, ":")
+		// Формат: rtpmap:<payload> или fmtp:<payload>
+		colonIdx := strings.Index(attrClean, ":")
 		if colonIdx == -1 {
-			filtered = append(filtered, attr)
+			filtered = append(filtered, attrClean)
 			continue
 		}
 
-		afterColon := attr[colonIdx+1:]
+		afterColon := attrClean[colonIdx+1:]
 		spaceIdx := strings.Index(afterColon, " ")
 		if spaceIdx == -1 {
 			// Нет пробела - возможно это fmtp без значения, оставляем
-			filtered = append(filtered, attr)
+			filtered = append(filtered, attrClean)
 			continue
 		}
 
 		payloadType := strings.TrimSpace(afterColon[:spaceIdx])
 		// Проверяем, есть ли этот PayloadType в форматах текущего медиа типа
 		if formatSet[payloadType] {
-			filtered = append(filtered, attr)
+			filtered = append(filtered, attrClean)
 		}
 		// Иначе пропускаем этот атрибут (он относится к другому медиа типу)
 	}
