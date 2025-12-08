@@ -262,11 +262,19 @@ func (d *DialogMedia) MediaSession() *media.MediaSession {
 }
 
 func (d *DialogMedia) handleMediaUpdate(req *sip.Request, tx sip.ServerTransaction, contactHDR sip.Header) error {
+	callID := ""
+	if req != nil {
+		callID = req.CallID().Value()
+	}
+	// TODO:
+	fmt.Printf("[DIAGO_HANDLE_MEDIA_UPDATE] Начало handleMediaUpdate: CallID=%s\n", callID)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.lastInvite = req
 
 	if err := d.sdpReInviteUnsafe(req.Body()); err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_HANDLE_MEDIA_UPDATE] ОШИБКА sdpReInviteUnsafe: %v, CallID=%s\n", err, callID)
 		return tx.Respond(sip.NewResponseFromRequest(req, sip.StatusRequestTerminated, "Request Terminated - "+err.Error(), nil))
 	}
 
@@ -281,12 +289,24 @@ func (d *DialogMedia) handleMediaUpdate(req *sip.Request, tx sip.ServerTransacti
 	} else if d.mediaSession != nil {
 		sdpBody = d.mediaSession.LocalSDP()
 	} else {
+		// TODO:
+		fmt.Printf("[DIAGO_HANDLE_MEDIA_UPDATE] ОШИБКА: нет медиа сессий, CallID=%s\n", callID)
 		return fmt.Errorf("no media session present")
 	}
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", sdpBody)
 	res.AppendHeader(contactHDR)
 	res.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-	return tx.Respond(res)
+	// TODO:
+	fmt.Printf("[DIAGO_HANDLE_MEDIA_UPDATE] Отправка 200 OK в ответ на re-INVITE: CallID=%s, SDPLength=%d\n", callID, len(sdpBody))
+	err := tx.Respond(res)
+	if err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_HANDLE_MEDIA_UPDATE] ОШИБКА отправки 200 OK: %v, CallID=%s\n", err, callID)
+	} else {
+		// TODO:
+		fmt.Printf("[DIAGO_HANDLE_MEDIA_UPDATE] УСПЕХ отправки 200 OK: CallID=%s\n", callID)
+	}
+	return err
 }
 
 // Must be protected with lock

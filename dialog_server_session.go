@@ -712,11 +712,29 @@ func (d *DialogServerSession) handleRefer(dg *Diago, req *sip.Request, tx sip.Se
 }
 
 func (d *DialogServerSession) handleReInvite(req *sip.Request, tx sip.ServerTransaction) error {
+	callID := ""
+	if req != nil {
+		callID = req.CallID().Value()
+	}
+	// TODO:
+	fmt.Printf("[DIAGO_HANDLE_REINVITE] Получен re-INVITE: CallID=%s\n", callID)
 	if err := d.ReadRequest(req, tx); err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_HANDLE_REINVITE] ОШИБКА ReadRequest: %v, CallID=%s\n", err, callID)
 		return tx.Respond(sip.NewResponseFromRequest(req, sip.StatusBadRequest, err.Error(), nil))
 	}
 
-	return d.handleMediaUpdate(req, tx, d.InviteResponse.Contact())
+	// TODO:
+	fmt.Printf("[DIAGO_HANDLE_REINVITE] Обработка re-INVITE через handleMediaUpdate: CallID=%s\n", callID)
+	err := d.handleMediaUpdate(req, tx, d.InviteResponse.Contact())
+	if err != nil {
+		// TODO:
+		fmt.Printf("[DIAGO_HANDLE_REINVITE] ОШИБКА handleMediaUpdate: %v, CallID=%s\n", err, callID)
+	} else {
+		// TODO:
+		fmt.Printf("[DIAGO_HANDLE_REINVITE] УСПЕХ handleMediaUpdate: CallID=%s\n", callID)
+	}
+	return err
 }
 
 func (d *DialogServerSession) readSIPInfoDTMF(req *sip.Request, tx sip.ServerTransaction) error {

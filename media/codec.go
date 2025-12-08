@@ -224,6 +224,9 @@ func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (i
 				}
 
 				encodingName := propsCodec[0]
+				// Нормализуем имя кодека: убираем точки и пробелы, приводим к верхнему регистру
+				// Это нужно для единообразного сравнения (H.264 -> H264, h264 -> H264)
+				normalizedName := normalizeCodecName(encodingName)
 				sampleRateStr := propsCodec[1]
 				sampleRate64, err := strconv.ParseUint(sampleRateStr, 10, 32)
 				if err != nil {
@@ -235,12 +238,12 @@ func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (i
 				// Video codecs typically use 33ms frame duration
 				// Audio codecs typically use 20ms packet duration
 				sampleDur := 20 * time.Millisecond
-				if encodingName == "H264" || encodingName == "VP8" || encodingName == "VP9" {
+				if normalizedName == "H264" || normalizedName == "VP8" || normalizedName == "VP9" {
 					sampleDur = 33 * time.Millisecond
 				}
 
 				codec := Codec{
-					Name:        encodingName,
+					Name:        normalizedName, // Используем нормализованное имя для единообразия
 					PayloadType: pt,
 					SampleRate:  uint32(sampleRate64),
 					SampleDur:   sampleDur,
@@ -265,4 +268,13 @@ func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (i
 		}
 	}
 	return n, rerr
+}
+
+// normalizeCodecName нормализует имя кодека для сравнения
+// Убирает точки и пробелы, приводит к верхнему регистру
+// Например: "H.264" -> "H264", "h264" -> "H264", "H264" -> "H264"
+func normalizeCodecName(name string) string {
+	// Убираем точки и пробелы, приводим к верхнему регистру
+	normalized := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(name, ".", ""), " ", ""))
+	return normalized
 }

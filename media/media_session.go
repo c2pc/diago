@@ -440,10 +440,16 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 
 	codecs := make([]Codec, len(md.Formats))
 	// Get attributes for this specific media type
+	// ВАЖНО: используем только атрибуты для текущего медиа типа, чтобы не смешивать аудио и видео кодеки
 	attrs := sd.MediaAttributes(mediaType)
 	if len(attrs) == 0 {
-		// Fallback to all attributes if MediaAttributes returns empty
-		attrs = sd.Values("a")
+		// Если MediaAttributes возвращает пустой список, это может означать, что атрибуты на уровне сессии
+		// Но для видео мы не должны использовать атрибуты из аудио блока
+		// Поэтому фильтруем атрибуты по медиа типу вручную
+		allAttrs := sd.Values("a")
+		// Фильтруем атрибуты: оставляем только те, которые относятся к текущему медиа типу
+		// или являются общими (не содержат PayloadType)
+		attrs = filterAttributesByMediaType(allAttrs, mediaType, md.Formats)
 	}
 	n, err := CodecsFromSDPRead(md.Formats, attrs, codecs)
 	if err != nil {
@@ -541,9 +547,12 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 			// Compare codecs by name and sample rate (not PayloadType, as it can vary in SDP)
 			// For video codecs, we only compare by name
 			// For audio codecs, we also compare sample rate
-			if c.Name == rc.Name {
+			// Нормализуем имена кодеков для сравнения (H.264 -> H264, h264 -> H264)
+			localName := normalizeCodecName(c.Name)
+			remoteName := normalizeCodecName(rc.Name)
+			if localName == remoteName {
 				// For audio codecs, also check sample rate
-				if c.Name != "H264" && c.Name != "VP8" && c.Name != "VP9" {
+				if localName != "H264" && localName != "VP8" && localName != "VP9" {
 					if c.SampleRate != rc.SampleRate {
 						continue
 					}
@@ -551,7 +560,7 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 				// Use remote PayloadType (rc) as it's what remote side proposed
 				matchedCodec := rc
 				// TODO:
-				fmt.Printf("[UPDATE_REMOTE_CODECS] Совпадение кодека: Name=%s, LocalPT=%d, RemotePT=%d, Используем RemotePT=%d, MediaType=%s\n", rc.Name, c.PayloadType, rc.PayloadType, matchedCodec.PayloadType, s.MediaType)
+				fmt.Printf("[UPDATE_REMOTE_CODECS] Совпадение кодека: LocalName=%s, RemoteName=%s, LocalPT=%d, RemotePT=%d, Используем RemotePT=%d, MediaType=%s\n", c.Name, rc.Name, c.PayloadType, rc.PayloadType, matchedCodec.PayloadType, s.MediaType)
 				filter = append(filter, matchedCodec)
 				found = true
 				break
@@ -559,13 +568,79 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 		}
 		if !found {
 			// TODO:
-			fmt.Printf("[UPDATE_REMOTE_CODECS] Кодек из remote SDP не найден в локальных: Name=%s, PayloadType=%d, MediaType=%s\n", rc.Name, rc.PayloadType, s.MediaType)
+			fmt.Printf("[UPDATE_REMOTE_CODECS] Кодек из remote SDP не найден в локальных: RemoteName=%s, PayloadType=%d, MediaType=%s, LocalCodecs=%v\n", rc.Name, rc.PayloadType, s.MediaType, getCodecNames(s.Codecs))
 		}
 	}
 	s.filterCodecs = filter
 	// TODO:
 	fmt.Printf("[UPDATE_REMOTE_CODECS] Обновлены filterCodecs: MediaType=%s, Count=%d, Codecs=%v\n", s.MediaType, len(s.filterCodecs), s.filterCodecs)
 	return len(s.filterCodecs)
+}
+
+// normalizeCodecName нормализует имя кодека для сравнения
+// Убирает точки, приводит к верхнему регистру
+// Например: "H.264" -> "H264", "h264" -> "H264", "H264" -> "H264"
+func normalizeCodecName(name string) string {
+	// Убираем точки и пробелы, приводим к верхнему регистру
+	normalized := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(name, ".", ""), " ", ""))
+	return normalized
+}
+
+// filterAttributesByMediaType фильтрует атрибуты SDP, оставляя только те, которые относятся к указанному медиа типу
+// Это нужно, чтобы при парсинге видео сессии не использовать атрибуты из аудио блока
+func filterAttributesByMediaType(allAttrs []string, mediaType string, formats []string) []string {
+	if len(allAttrs) == 0 {
+		return allAttrs
+	}
+
+	// Создаем set форматов для текущего медиа типа для быстрой проверки
+	formatSet := make(map[string]bool, len(formats))
+	for _, f := range formats {
+		formatSet[f] = true
+	}
+
+	filtered := make([]string, 0, len(allAttrs))
+	for _, attr := range allAttrs {
+		// Атрибуты, которые не содержат PayloadType, оставляем (они общие)
+		if !strings.HasPrefix(attr, "a=rtpmap:") && !strings.HasPrefix(attr, "a=fmtp:") {
+			filtered = append(filtered, attr)
+			continue
+		}
+
+		// Для rtpmap и fmtp проверяем, относится ли PayloadType к текущему медиа типу
+		// Формат: a=rtpmap:<payload> или a=fmtp:<payload>
+		colonIdx := strings.Index(attr, ":")
+		if colonIdx == -1 {
+			filtered = append(filtered, attr)
+			continue
+		}
+
+		afterColon := attr[colonIdx+1:]
+		spaceIdx := strings.Index(afterColon, " ")
+		if spaceIdx == -1 {
+			// Нет пробела - возможно это fmtp без значения, оставляем
+			filtered = append(filtered, attr)
+			continue
+		}
+
+		payloadType := strings.TrimSpace(afterColon[:spaceIdx])
+		// Проверяем, есть ли этот PayloadType в форматах текущего медиа типа
+		if formatSet[payloadType] {
+			filtered = append(filtered, attr)
+		}
+		// Иначе пропускаем этот атрибут (он относится к другому медиа типу)
+	}
+
+	return filtered
+}
+
+// getCodecNames возвращает список имен кодеков для логирования
+func getCodecNames(codecs []Codec) []string {
+	names := make([]string, 0, len(codecs))
+	for _, c := range codecs {
+		names = append(names, fmt.Sprintf("%s(PT=%d)", c.Name, c.PayloadType))
+	}
+	return names
 }
 
 // CommonCodecs returns common codecs if negotiation is finished, that is Local and Remote SDP are exchanged
