@@ -545,17 +545,26 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 	filter := codecs[:0] // reuse buffer
 	for _, rc := range codecs {
 		found := false
+		// Нормализуем имя remote кодека один раз
+		remoteNameNormalized := normalizeCodecName(rc.Name)
+		// TODO:
+		fmt.Printf("[UPDATE_REMOTE_CODECS] Поиск совпадения для remote кодека: RemoteName=%s (нормализовано=%s), PayloadType=%d, MediaType=%s\n", rc.Name, remoteNameNormalized, rc.PayloadType, s.MediaType)
+
 		for _, c := range s.Codecs {
 			// Compare codecs by name and sample rate (not PayloadType, as it can vary in SDP)
 			// For video codecs, we only compare by name
 			// For audio codecs, we also compare sample rate
 			// Нормализуем имена кодеков для сравнения (H.264 -> H264, h264 -> H264)
-			localName := normalizeCodecName(c.Name)
-			remoteName := normalizeCodecName(rc.Name)
-			if localName == remoteName {
+			localNameNormalized := normalizeCodecName(c.Name)
+			// TODO:
+			fmt.Printf("[UPDATE_REMOTE_CODECS] Сравнение: LocalName=%s (нормализовано=%s), RemoteName=%s (нормализовано=%s), LocalPT=%d, RemotePT=%d\n", c.Name, localNameNormalized, rc.Name, remoteNameNormalized, c.PayloadType, rc.PayloadType)
+
+			if localNameNormalized == remoteNameNormalized {
 				// For audio codecs, also check sample rate
-				if localName != "H264" && localName != "VP8" && localName != "VP9" {
+				if localNameNormalized != "H264" && localNameNormalized != "VP8" && localNameNormalized != "VP9" {
 					if c.SampleRate != rc.SampleRate {
+						// TODO:
+						fmt.Printf("[UPDATE_REMOTE_CODECS] Кодек совпадает по имени, но SampleRate различается: LocalSR=%d, RemoteSR=%d, пропускаем\n", c.SampleRate, rc.SampleRate)
 						continue
 					}
 				}
@@ -570,7 +579,7 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 		}
 		if !found {
 			// TODO:
-			fmt.Printf("[UPDATE_REMOTE_CODECS] Кодек из remote SDP не найден в локальных: RemoteName=%s, PayloadType=%d, MediaType=%s, LocalCodecs=%v\n", rc.Name, rc.PayloadType, s.MediaType, getCodecNames(s.Codecs))
+			fmt.Printf("[UPDATE_REMOTE_CODECS] Кодек из remote SDP не найден в локальных: RemoteName=%s (нормализовано=%s), PayloadType=%d, MediaType=%s, LocalCodecs=%v\n", rc.Name, remoteNameNormalized, rc.PayloadType, s.MediaType, getCodecNames(s.Codecs))
 		}
 	}
 	s.filterCodecs = filter
@@ -591,13 +600,25 @@ func getMediaAttributesFromSDP(sdpData []byte, mediaType string) []string {
 	var attrs []string
 	inTargetMedia := false
 
-	for _, line := range lines {
+	// TODO:
+	fmt.Printf("[GET_MEDIA_ATTRS] Парсинг SDP для медиа типа: %s, Всего строк: %d\n", mediaType, len(lines))
+
+	for i, line := range lines {
 		// Проверяем начало медиа блока
 		if strings.HasPrefix(line, "m=") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				currentMediaType := parts[1]
+				wasInTargetMedia := inTargetMedia
 				inTargetMedia = (currentMediaType == mediaType)
+				// TODO:
+				if inTargetMedia {
+					fmt.Printf("[GET_MEDIA_ATTRS] Найден целевой медиа блок: %s, строка %d: %s\n", mediaType, i+1, line)
+				} else if wasInTargetMedia {
+					// Выходим из целевого медиа блока
+					fmt.Printf("[GET_MEDIA_ATTRS] Выход из целевого медиа блока: %s, строка %d: %s\n", mediaType, i+1, line)
+					break
+				}
 			} else {
 				inTargetMedia = false
 			}
@@ -609,16 +630,22 @@ func getMediaAttributesFromSDP(sdpData []byte, mediaType string) []string {
 			// Убираем префикс "a=" для совместимости с CodecsFromSDPRead
 			attr := strings.TrimPrefix(line, "a=")
 			attrs = append(attrs, attr)
+			// TODO:
+			fmt.Printf("[GET_MEDIA_ATTRS] Добавлен атрибут для %s: %s\n", mediaType, attr)
 		} else if inTargetMedia && !strings.HasPrefix(line, "a=") && strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "c=") {
 			// Если встретили не-атрибут (например, b=), но мы все еще в нужном медиа блоке,
 			// это нормально - продолжаем собирать атрибуты
 			continue
-		} else if strings.HasPrefix(line, "m=") {
+		} else if strings.HasPrefix(line, "m=") && inTargetMedia {
 			// Встретили следующий медиа блок - выходим
+			// TODO:
+			fmt.Printf("[GET_MEDIA_ATTRS] Выход из целевого медиа блока (следующий m=): %s, строка %d: %s\n", mediaType, i+1, line)
 			break
 		}
 	}
 
+	// TODO:
+	fmt.Printf("[GET_MEDIA_ATTRS] Найдено атрибутов для %s: %d\n", mediaType, len(attrs))
 	return attrs
 }
 

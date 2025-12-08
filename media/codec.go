@@ -186,6 +186,8 @@ func mapSupportedCodec(f string) Codec {
 // some properties could not be read
 // You can take what is parsed or return error
 func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (int, error) {
+	// TODO:
+	fmt.Printf("[CODECS_FROM_SDP] Парсинг кодеков: Formats=%v, AttrsCount=%d\n", formats, len(attrs))
 	n := 0
 	var rerr error
 	for _, f := range formats {
@@ -208,10 +210,16 @@ func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (i
 		}
 		pt := uint8(pt64)
 
+		// TODO:
+		fmt.Printf("[CODECS_FROM_SDP] Поиск атрибута для формата: PT=%d (f=%s)\n", pt, f)
+		foundAttr := false
 		for _, a := range attrs {
 			// a=rtpmap:<payload type> <encoding name>/<clock rate> [/<encoding parameters>]
 			pref := "rtpmap:" + f + " "
 			if strings.HasPrefix(a, pref) {
+				foundAttr = true
+				// TODO:
+				fmt.Printf("[CODECS_FROM_SDP] Найден атрибут для PT=%d: %s\n", pt, a)
 				// Check properties of this codec
 				str := a[len(pref):]
 				// TODO use more efficient reading props
@@ -261,12 +269,20 @@ func CodecsFromSDPRead(formats []string, attrs []string, codecsAudio []Codec) (i
 					rerr = errors.Join(rerr, fmt.Errorf("codecs array overflow: tried to write at index %d but array size is %d", n, len(codecsAudio)))
 					break // Прерываем внутренний цикл по attrs
 				}
+				// TODO:
+				fmt.Printf("[CODECS_FROM_SDP] Создан кодек: Name=%s (нормализовано=%s), PayloadType=%d, SampleRate=%d\n", encodingName, normalizedName, pt, sampleRate64)
 				codecsAudio[n] = codec
 				n++
 				break // Прерываем цикл по attrs после первого совпадения для этого формата
 			}
 		}
+		if !foundAttr {
+			// TODO:
+			fmt.Printf("[CODECS_FROM_SDP] Атрибут не найден для формата: PT=%d (f=%s)\n", pt, f)
+		}
 	}
+	// TODO:
+	fmt.Printf("[CODECS_FROM_SDP] Парсинг завершен: Найдено кодеков=%d\n", n)
 	return n, rerr
 }
 
