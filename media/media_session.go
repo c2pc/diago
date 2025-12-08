@@ -634,9 +634,14 @@ func getMediaAttributesFromSDP(sdpData []byte, mediaType string) []string {
 
 		// Проверяем начало медиа блока
 		if strings.HasPrefix(line, "m=") {
+			// Формат: m=<media> <port> <proto> <fmt> ...
+			// Пример: m=audio 42706 RTP/AVP 96 8 0 101
+			// Медиа тип находится сразу после "m="
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				currentMediaType := parts[1]
+				// parts[0] = "m=audio", parts[1] = "42706" (порт)
+				// Медиа тип находится в parts[0] после "m="
+				currentMediaType := strings.TrimPrefix(parts[0], "m=")
 				wasInTargetMedia := inTargetMedia
 				inTargetMedia = (currentMediaType == mediaType)
 				// TODO:
