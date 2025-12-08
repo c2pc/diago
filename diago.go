@@ -271,29 +271,30 @@ func NewDiago(ua *sipgo.UserAgent, opts ...DiagoOption) *Diago {
 		if err := dg.cache.server.DialogStore(dWrap.Context(), dWrap.ID, dWrap); err != nil {
 			return fmt.Errorf("failed to store server dialog: %w", err)
 		}
-		defer func() {
-			// TODO: have better context
+
+		// Удаляем диалог из кэша только когда он закрывается, а не когда OnInvite завершается
+		// Это важно потому что AnswerOptions может выполняться в goroutine и ACK может прийти позже
+		dWrap.OnClose(func() error {
+			// TODO:
+			fmt.Printf("[DIAGO] Удаление диалога из кэша при закрытии: CallID=%s\n", dWrap.ID)
 			if err := dg.cache.server.DialogDelete(context.Background(), dWrap.ID); err != nil {
 				dg.log.Error("Failed to delete server dialog", "error", err)
+				return err
 			}
-		}()
+			return nil
+		})
 
 		dg.serveHandler(dWrap)
 
-		// Check is dialog closed
+		// Wait for dialog to be closed or context cancelled
+		// Don't call Hangup() here - it should be called by the handler when needed
+		// Hangup() will be called automatically when dialog context is cancelled or BYE is received
 		dialogCtx := dialog.Context()
-		// Always try hanguping call
-		ctx, cancel := context.WithTimeout(dialogCtx, 10*time.Second)
-		defer cancel()
-
-		if err := dWrap.Hangup(ctx); err != nil {
-			if errors.Is(ctx.Err(), context.Canceled) {
-				// Already hangup
-				return nil
-			}
-
-			return fmt.Errorf("hanguping call failed: %w", err)
-		}
+		// TODO:
+		fmt.Printf("[DIAGO_ON_INVITE] Ожидание завершения диалога: CallID=%s\n", dWrap.ID)
+		<-dialogCtx.Done()
+		// TODO:
+		fmt.Printf("[DIAGO_ON_INVITE] Диалог завершен: CallID=%s\n", dWrap.ID)
 		return nil
 	}))
 

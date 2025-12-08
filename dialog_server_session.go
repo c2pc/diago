@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 
 	"github.com/c2pc/diago/media"
@@ -127,6 +128,13 @@ func (d *DialogServerSession) RespondSDP(body []byte) error {
 	if err != nil {
 		// TODO:
 		fmt.Printf("[DIAGO_RESPOND_SDP] ОШИБКА отправки 200 OK: %v, CallID=%s\n", err, callID)
+		// Если транзакция уже завершена, это не критично - возможно ACK уже пришел или транзакция отменена
+		// Не возвращаем ошибку, чтобы не прерывать обработку
+		if err.Error() == "transaction terminated" || strings.Contains(err.Error(), "transaction terminated") {
+			// TODO:
+			fmt.Printf("[DIAGO_RESPOND_SDP] Транзакция уже завершена (возможно ACK уже пришел), CallID=%s\n", callID)
+			return nil // Не критично
+		}
 	} else {
 		// TODO:
 		fmt.Printf("[DIAGO_RESPOND_SDP] УСПЕХ отправки 200 OK: CallID=%s\n", callID)
@@ -363,16 +371,27 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 					n = maxCodecs
 				}
 
-				// Filter only video codecs
+				// Filter only video codecs (exclude RTX, RED, ULPFEC)
 				videoCodecs := []media.Codec{}
 				for i := 0; i < n; i++ {
+					nameUpper := strings.ToUpper(codecs[i].Name)
+					// Пропускаем RTX, RED, ULPFEC - это вспомогательные кодеки
+					if nameUpper == "RTX" || nameUpper == "RED" || nameUpper == "ULPFEC" {
+						// TODO:
+						fmt.Printf("[DIAGO_ANSWER_SESSION] Пропущен вспомогательный кодек при создании видео сессии: %s, PayloadType=%d, CallID=%s\n", codecs[i].Name, codecs[i].PayloadType, callID)
+						continue
+					}
 					if codecs[i].Name == "H264" || codecs[i].Name == "VP8" || codecs[i].Name == "VP9" {
+						// TODO:
+						fmt.Printf("[DIAGO_ANSWER_SESSION] Найден видео кодек из SDP: %s, PayloadType=%d, CallID=%s\n", codecs[i].Name, codecs[i].PayloadType, callID)
 						videoCodecs = append(videoCodecs, codecs[i])
 					}
 				}
 
 				// If no video codecs found, use default
 				if len(videoCodecs) == 0 {
+					// TODO:
+					fmt.Printf("[DIAGO_ANSWER_SESSION] Видео кодеки не найдены в SDP, используем дефолтный H264, CallID=%s\n", callID)
 					videoCodecs = []media.Codec{media.CodecVideoH264}
 				}
 
@@ -399,18 +418,25 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 				if bindIP != nil {
 					videoSess := &media.MediaSession{
 						MediaType:  "video",
-						Codecs:     videoCodecs,
+						Codecs:     videoCodecs, // Кодеки с PayloadType из SDP (правильный PayloadType)
 						Laddr:      net.UDPAddr{IP: bindIP, Port: 0},
 						ExternalIP: externalIP,
 						Mode:       sdp.ModeSendrecv,
 						SecureRTP:  secureRTP,
 						SRTPAlg:    srtpAlg,
 					}
+					// TODO:
+					fmt.Printf("[DIAGO_ANSWER_SESSION] Создание видео сессии: CallID=%s, Codecs=%v\n", callID, videoCodecs)
 
 					if initErr := videoSess.Init(); initErr == nil {
 						d.mu.Lock()
 						d.videoMediaSession = videoSess
 						d.mu.Unlock()
+						// TODO:
+						fmt.Printf("[DIAGO_ANSWER_SESSION] Видео сессия создана: CallID=%s, Codecs=%v\n", callID, videoSess.Codecs)
+					} else {
+						// TODO:
+						fmt.Printf("[DIAGO_ANSWER_SESSION] ОШИБКА инициализации видео сессии: %v, CallID=%s\n", initErr, callID)
 					}
 				}
 			}
@@ -426,8 +452,12 @@ func (d *DialogServerSession) answerSession(rtpSess *media.RTPSession) error {
 				}
 			}
 
-			// Video session exists, update it
+			// Video session exists, update it with remote SDP
+			// TODO:
+			fmt.Printf("[DIAGO_ANSWER_SESSION] Обновление видео сессии RemoteSDP: CallID=%s, LocalCodecs=%v\n", callID, d.videoMediaSession.Codecs)
 			remoteSDPErr := d.videoMediaSession.RemoteSDP(sdpBody)
+			// TODO:
+			fmt.Printf("[DIAGO_ANSWER_SESSION] RemoteSDP завершен: CallID=%s, FilterCodecs=%v\n", callID, d.videoMediaSession.CommonCodecs())
 
 			// Even if RemoteSDP returns error, we need to ensure Raddr is set
 			// if video is in SDP, otherwise ReadRTP will block

@@ -524,13 +524,19 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 }
 
 func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
+	// TODO:
+	fmt.Printf("[UPDATE_REMOTE_CODECS] Начало: MediaType=%s, LocalCodecs=%v, RemoteCodecs=%v\n", s.MediaType, s.Codecs, codecs)
 	if len(s.Codecs) == 0 {
 		s.Codecs = codecs
+		s.filterCodecs = codecs
+		// TODO:
+		fmt.Printf("[UPDATE_REMOTE_CODECS] Локальные кодеки пусты, используем remote кодеки: MediaType=%s, Codecs=%v\n", s.MediaType, codecs)
 		return len(codecs)
 	}
 
 	filter := codecs[:0] // reuse buffer
 	for _, rc := range codecs {
+		found := false
 		for _, c := range s.Codecs {
 			// Compare codecs by name and sample rate (not PayloadType, as it can vary in SDP)
 			// For video codecs, we only compare by name
@@ -544,12 +550,21 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 				}
 				// Use remote PayloadType (rc) as it's what remote side proposed
 				matchedCodec := rc
+				// TODO:
+				fmt.Printf("[UPDATE_REMOTE_CODECS] Совпадение кодека: Name=%s, LocalPT=%d, RemotePT=%d, Используем RemotePT=%d, MediaType=%s\n", rc.Name, c.PayloadType, rc.PayloadType, matchedCodec.PayloadType, s.MediaType)
 				filter = append(filter, matchedCodec)
+				found = true
 				break
 			}
 		}
+		if !found {
+			// TODO:
+			fmt.Printf("[UPDATE_REMOTE_CODECS] Кодек из remote SDP не найден в локальных: Name=%s, PayloadType=%d, MediaType=%s\n", rc.Name, rc.PayloadType, s.MediaType)
+		}
 	}
 	s.filterCodecs = filter
+	// TODO:
+	fmt.Printf("[UPDATE_REMOTE_CODECS] Обновлены filterCodecs: MediaType=%s, Count=%d, Codecs=%v\n", s.MediaType, len(s.filterCodecs), s.filterCodecs)
 	return len(s.filterCodecs)
 }
 
