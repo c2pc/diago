@@ -445,13 +445,25 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 	// Поэтому парсим SDP построчно, чтобы найти атрибуты только для текущего медиа блока
 	attrs := getMediaAttributesFromSDP(sdpReceived, mediaType)
 	if len(attrs) == 0 {
+		// TODO:
+		fmt.Printf("[REMOTE_SDP] getMediaAttributesFromSDP вернул 0 атрибутов для %s, используем fallback\n", mediaType)
 		// Fallback: если не удалось найти атрибуты построчно, используем MediaAttributes
 		attrs = sd.MediaAttributes(mediaType)
 		if len(attrs) == 0 {
+			// TODO:
+			fmt.Printf("[REMOTE_SDP] MediaAttributes вернул 0 атрибутов для %s, используем filterAttributesByMediaType\n", mediaType)
 			// Если MediaAttributes возвращает пустой список, фильтруем все атрибуты по форматам
 			allAttrs := sd.Values("a")
 			attrs = filterAttributesByMediaType(allAttrs, mediaType, md.Formats)
+			// TODO:
+			fmt.Printf("[REMOTE_SDP] filterAttributesByMediaType вернул %d атрибутов для %s\n", len(attrs), mediaType)
+		} else {
+			// TODO:
+			fmt.Printf("[REMOTE_SDP] MediaAttributes вернул %d атрибутов для %s (все атрибуты, включая другие медиа типы)\n", len(attrs), mediaType)
 		}
+	} else {
+		// TODO:
+		fmt.Printf("[REMOTE_SDP] getMediaAttributesFromSDP вернул %d атрибутов для %s\n", len(attrs), mediaType)
 	}
 	n, err := CodecsFromSDPRead(md.Formats, attrs, codecs)
 	if err != nil {
@@ -602,8 +614,24 @@ func getMediaAttributesFromSDP(sdpData []byte, mediaType string) []string {
 
 	// TODO:
 	fmt.Printf("[GET_MEDIA_ATTRS] Парсинг SDP для медиа типа: %s, Всего строк: %d\n", mediaType, len(lines))
+	// TODO: выводим первые несколько строк для отладки
+	if len(lines) > 0 {
+		maxDebugLines := 10
+		if len(lines) < maxDebugLines {
+			maxDebugLines = len(lines)
+		}
+		fmt.Printf("[GET_MEDIA_ATTRS] Первые %d строк SDP:\n", maxDebugLines)
+		for i := 0; i < maxDebugLines; i++ {
+			fmt.Printf("[GET_MEDIA_ATTRS]   [%d] %q\n", i+1, lines[i])
+		}
+	}
 
 	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
 		// Проверяем начало медиа блока
 		if strings.HasPrefix(line, "m=") {
 			parts := strings.Fields(line)
@@ -618,9 +646,14 @@ func getMediaAttributesFromSDP(sdpData []byte, mediaType string) []string {
 					// Выходим из целевого медиа блока
 					fmt.Printf("[GET_MEDIA_ATTRS] Выход из целевого медиа блока: %s, строка %d: %s\n", mediaType, i+1, line)
 					break
+				} else {
+					// TODO:
+					fmt.Printf("[GET_MEDIA_ATTRS] Пропущен медиа блок: %s (ищем %s), строка %d: %s\n", currentMediaType, mediaType, i+1, line)
 				}
 			} else {
 				inTargetMedia = false
+				// TODO:
+				fmt.Printf("[GET_MEDIA_ATTRS] Некорректная m= строка, строка %d: %s\n", i+1, line)
 			}
 			continue
 		}
@@ -635,12 +668,9 @@ func getMediaAttributesFromSDP(sdpData []byte, mediaType string) []string {
 		} else if inTargetMedia && !strings.HasPrefix(line, "a=") && strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "c=") {
 			// Если встретили не-атрибут (например, b=), но мы все еще в нужном медиа блоке,
 			// это нормально - продолжаем собирать атрибуты
-			continue
-		} else if strings.HasPrefix(line, "m=") && inTargetMedia {
-			// Встретили следующий медиа блок - выходим
 			// TODO:
-			fmt.Printf("[GET_MEDIA_ATTRS] Выход из целевого медиа блока (следующий m=): %s, строка %d: %s\n", mediaType, i+1, line)
-			break
+			fmt.Printf("[GET_MEDIA_ATTRS] Пропущена не-атрибут строка в %s блоке: %s\n", mediaType, line)
+			continue
 		}
 	}
 
