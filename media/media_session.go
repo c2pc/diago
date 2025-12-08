@@ -577,15 +577,6 @@ func (s *MediaSession) updateRemoteCodecs(codecs []Codec) int {
 	return len(s.filterCodecs)
 }
 
-// normalizeCodecName нормализует имя кодека для сравнения
-// Убирает точки, приводит к верхнему регистру
-// Например: "H.264" -> "H264", "h264" -> "H264", "H264" -> "H264"
-func normalizeCodecName(name string) string {
-	// Убираем точки и пробелы, приводим к верхнему регистру
-	normalized := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(name, ".", ""), " ", ""))
-	return normalized
-}
-
 // filterAttributesByMediaType фильтрует атрибуты SDP, оставляя только те, которые относятся к указанному медиа типу
 // Это нужно, чтобы при парсинге видео сессии не использовать атрибуты из аудио блока
 func filterAttributesByMediaType(allAttrs []string, mediaType string, formats []string) []string {
