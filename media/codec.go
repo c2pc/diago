@@ -23,11 +23,11 @@ var (
 
 	// Video codecs
 	// H.264 is the most common video codec for SIP
-	CodecVideoH264 = Codec{PayloadType: 96, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "H264"}
+	CodecVideoH264 = Codec{PayloadType: 99, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "H264"}
 	// VP8 is commonly used in WebRTC
-	CodecVideoVP8 = Codec{PayloadType: 97, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "VP8"}
+	CodecVideoVP8 = Codec{PayloadType: 103, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "VP8"}
 	// VP9 is a newer codec
-	CodecVideoVP9 = Codec{PayloadType: 98, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "VP9"}
+	CodecVideoVP9 = Codec{PayloadType: 106, SampleRate: 90000, SampleDur: 33 * time.Millisecond, NumChannels: 1, Name: "VP9"}
 )
 
 type Codec struct {
