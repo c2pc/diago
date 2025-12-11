@@ -400,21 +400,14 @@ func (s *MediaSession) LocalSDP() []byte {
 	// SSRC should be consistent for the session, so we generate it once
 	var ssrc uint32
 	var cname string
-	if s.rtpConn != nil {
-		// Try to get SSRC from RTP session if available
-		// For now, generate a random SSRC
-		ssrc = rand.Uint32()
-		// Generate cname as hex string (16 bytes = 32 hex chars)
-		cnameBytes := make([]byte, 16)
-		rand.Read(cnameBytes)
-		cname = fmt.Sprintf("%x", cnameBytes)
-	} else {
-		// Generate SSRC and cname even if rtpConn is not initialized
-		ssrc = rand.Uint32()
-		cnameBytes := make([]byte, 16)
-		rand.Read(cnameBytes)
-		cname = fmt.Sprintf("%x", cnameBytes)
-	}
+	// Generate SSRC as 4 random bytes
+	ssrcBytes := make([]byte, 4)
+	rand.Read(ssrcBytes)
+	ssrc = uint32(ssrcBytes[0])<<24 | uint32(ssrcBytes[1])<<16 | uint32(ssrcBytes[2])<<8 | uint32(ssrcBytes[3])
+	// Generate cname as hex string (16 bytes = 32 hex chars)
+	cnameBytes := make([]byte, 16)
+	rand.Read(cnameBytes)
+	cname = fmt.Sprintf("%x", cnameBytes)
 
 	// Calculate RTCP port (typically RTP port + 1)
 	rtcpPort := rtpPort + 1
