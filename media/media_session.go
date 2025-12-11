@@ -396,7 +396,41 @@ func (s *MediaSession) LocalSDP() []byte {
 		mediaType = "audio" // Default to audio for backward compatibility
 	}
 
-	return generateSDP(mediaType, rtpProfile, ip, connIP, rtpPort, s.Mode, codecs, localSDES)
+	// Generate SSRC and cname for this media session
+	// SSRC should be consistent for the session, so we generate it once
+	var ssrc uint32
+	var cname string
+	if s.rtpConn != nil {
+		// Try to get SSRC from RTP session if available
+		// For now, generate a random SSRC
+		ssrc = rand.Uint32()
+		// Generate cname as hex string (16 bytes = 32 hex chars)
+		cnameBytes := make([]byte, 16)
+		rand.Read(cnameBytes)
+		cname = fmt.Sprintf("%x", cnameBytes)
+	} else {
+		// Generate SSRC and cname even if rtpConn is not initialized
+		ssrc = rand.Uint32()
+		cnameBytes := make([]byte, 16)
+		rand.Read(cnameBytes)
+		cname = fmt.Sprintf("%x", cnameBytes)
+	}
+
+	// Calculate RTCP port (typically RTP port + 1)
+	rtcpPort := rtpPort + 1
+	if rtpPort == 0 {
+		rtcpPort = 0
+	}
+
+	// Set bandwidth based on media type
+	bandwidth := 0
+	if mediaType == "audio" {
+		bandwidth = 64000 // 64 kbps for audio
+	} else if mediaType == "video" {
+		bandwidth = 256000 // 256 kbps for video
+	}
+
+	return generateSDP(mediaType, rtpProfile, ip, connIP, rtpPort, s.Mode, codecs, localSDES, ssrc, cname, rtcpPort, bandwidth)
 }
 
 func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
@@ -1090,7 +1124,7 @@ type sdesInline struct {
 }
 
 // generateSDP generates SDP for audio or video media
-func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectionIP net.IP, rtpPort int, mode string, codecs []Codec, sdes sdesInline) []byte {
+func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectionIP net.IP, rtpPort int, mode string, codecs []Codec, sdes sdesInline, ssrc uint32, cname string, rtcpPort int, bandwidth int) []byte {
 	ntpTime := GetCurrentNTPTimestamp()
 
 	fmts := make([]string, len(codecs))
@@ -1103,13 +1137,13 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 			switch f.Name {
 			case "H264":
 				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d H264/90000", f.PayloadType))
-				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d profile-level-id=42e01f;packetization-mode=1", f.PayloadType))
+				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d profile-level-id=42e01e; packetization-mode=1", f.PayloadType))
 			case "VP8":
 				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d VP8/90000", f.PayloadType))
-				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d max-fr=30;max-fs=580", f.PayloadType))
+				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d max-fr=30; max-fs=580", f.PayloadType))
 			case "VP9":
 				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d VP9/90000", f.PayloadType))
-				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d max-fr=30;max-fs=580", f.PayloadType))
+				formatsMap = append(formatsMap, fmt.Sprintf("a=fmtp:%d max-fr=30; max-fs=580", f.PayloadType))
 			default:
 				// Generic format for unknown video codecs
 				formatsMap = append(formatsMap, fmt.Sprintf("a=rtpmap:%d %s/90000", f.PayloadType, f.Name))
@@ -1153,14 +1187,27 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 	s := []string{
 		"v=0",
 		fmt.Sprintf("o=- %d %d IN IP4 %s", ntpTime, ntpTime, originIP),
-		"s=Sip Go Media",
-		// "b=AS:84",
+		"s=pjmedia",
+		"b=AS:352",
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
+		"a=X-nat:0",
+		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		fmt.Sprintf("m=%s %d %s %s", mediaType, rtpPort, rtpProfile, strings.Join(fmts, " ")),
+		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 	}
 
 	s = append(s, formatsMap...)
+
+	// Add bandwidth (TIAS) for this media
+	if bandwidth > 0 {
+		s = append(s, fmt.Sprintf("b=TIAS:%d", bandwidth))
+	}
+
+	// Add RTCP port
+	if rtcpPort > 0 {
+		s = append(s, fmt.Sprintf("a=rtcp:%d IN IP4 %s", rtcpPort, connectionIP))
+	}
 
 	// Audio-specific attributes
 	if mediaType == "audio" {
@@ -1170,6 +1217,16 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 	}
 
 	s = append(s, "a="+mode)
+
+	// Add SSRC and cname if provided
+	if ssrc > 0 && cname != "" {
+		s = append(s, fmt.Sprintf("a=ssrc:%d cname:%s", ssrc, cname))
+	}
+
+	// Add RTCP feedback for video
+	if mediaType == "video" {
+		s = append(s, "a=rtcp-fb:* nack pli")
+	}
 
 	if sdes.alg != "" {
 		s = append(s, fmt.Sprintf("a=crypto:%d %s inline:%s", sdes.tag, sdes.alg, sdes.base64))
@@ -1255,9 +1312,11 @@ func CombineSDP(sessions []*MediaSession) []byte {
 	s := []string{
 		"v=0",
 		fmt.Sprintf("o=- %d %d IN IP4 %s", ntpTime, ntpTime, originIP),
-		"s=Sip Go Media",
+		"s=pjmedia",
+		"b=AS:352",
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
+		"a=X-nat:0",
 	}
 	// Note: We don't add session-level connection line if it's the same as media-level
 
