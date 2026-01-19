@@ -217,8 +217,9 @@ func (d *DialogMedia) initMediaSessionFromConf(conf MediaConfig) error {
 		d.mediaSession = sess
 	}
 
-	// Create video session if video codecs are present
-	if len(videoCodecs) > 0 {
+	// Create video session if video codecs are present AND WithVideo is true
+	// By default WithVideo is false, so video is disabled unless explicitly enabled
+	if len(videoCodecs) > 0 && conf.WithVideo {
 		videoMode := conf.VideoMode
 		if videoMode == "" {
 			videoMode = sdp.ModeSendrecv

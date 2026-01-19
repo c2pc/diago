@@ -154,6 +154,13 @@ type MediaConfig struct {
 	// Use constants: sdp.ModeSendrecv, sdp.ModeRecvonly, sdp.ModeSendonly
 	VideoMode string
 
+	// WithVideo controls whether to enable video stream
+	// If true, video session will be created if video codecs are present in Codecs
+	// If false (default), only audio will be used
+	// Default: false (только аудио, видео нужно включить явно)
+	// Для включения видео: установите WithVideo: true в MediaConfig или передайте в InviteOptions
+	WithVideo bool
+
 	// TODO, For now it is global on media package
 	// RTPPortStart int
 	// RTPPortEnd   int
@@ -195,7 +202,8 @@ func NewDiago(ua *sipgo.UserAgent, opts ...DiagoOption) *Diago {
 		},
 		transports: []Transport{},
 		mediaConf: MediaConfig{
-			Codecs: []media.Codec{media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000},
+			Codecs:    []media.Codec{media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000},
+			WithVideo: false, // По умолчанию без видео, видео можно включить явно
 		},
 
 		cache: DialogCachePool{
@@ -259,10 +267,14 @@ func NewDiago(ua *sipgo.UserAgent, opts ...DiagoOption) *Diago {
 			DialogMedia:         DialogMedia{},
 			// TODO we may actually just build media session with this conf here
 			mediaConf: MediaConfig{
-				Codecs:     dg.mediaConf.Codecs,
-				secureRTP:  tran.MediaSRTP,
-				bindIP:     tran.mediaBindIP,
-				externalIP: tran.MediaExternalIP,
+				Codecs:       dg.mediaConf.Codecs,
+				secureRTP:    tran.MediaSRTP,
+				bindIP:       tran.mediaBindIP,
+				externalIP:   tran.MediaExternalIP,
+				AudioMode:    dg.mediaConf.AudioMode,
+				VideoMode:    dg.mediaConf.VideoMode,
+				WithVideo:    dg.mediaConf.WithVideo,
+				SecureRTPAlg: dg.mediaConf.SecureRTPAlg,
 			},
 		}
 
@@ -562,12 +574,19 @@ type InviteOptions struct {
 	Password string
 	// Custom headers to pass. DO NOT SET THIS to nil
 	Headers []sip.Header
+	// WithVideo overrides MediaConfig.WithVideo for this specific call
+	// If not set (nil), uses global MediaConfig.WithVideo
+	// Use: WithVideo: &true (с видео) or WithVideo: &false (без видео)
+	WithVideo *bool
 }
 
 // Invite makes outgoing call leg and waits for answer.
 // If you want to bridge call then use helper InviteBridge
 func (dg *Diago) Invite(ctx context.Context, recipient sip.Uri, opts InviteOptions) (d *DialogClientSession, err error) {
-	d, err = dg.NewDialog(recipient, NewDialogOptions{Transport: opts.Transport})
+	d, err = dg.NewDialog(recipient, NewDialogOptions{
+		Transport: opts.Transport,
+		WithVideo: opts.WithVideo,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -634,6 +653,11 @@ type NewDialogOptions struct {
 	// TransportID matches diago transport by ID instead protocol
 	TransportID string
 
+	// WithVideo overrides MediaConfig.WithVideo for this specific call
+	// If not set (nil), uses global MediaConfig.WithVideo
+	// Use: WithVideo: &true (с видео) or WithVideo: &false (без видео)
+	WithVideo *bool
+
 	// Codecs []media.Codec
 }
 
@@ -679,10 +703,19 @@ func (dg *Diago) NewDialog(recipient sip.Uri, opts NewDialogOptions) (d *DialogC
 	// Create media
 	// TODO explicit media format passing
 	mediaConf := MediaConfig{
-		Codecs:     dg.mediaConf.Codecs,
-		secureRTP:  tran.MediaSRTP,
-		bindIP:     tran.mediaBindIP,
-		externalIP: tran.MediaExternalIP,
+		Codecs:       dg.mediaConf.Codecs,
+		secureRTP:    tran.MediaSRTP,
+		bindIP:       tran.mediaBindIP,
+		externalIP:   tran.MediaExternalIP,
+		AudioMode:    dg.mediaConf.AudioMode,
+		VideoMode:    dg.mediaConf.VideoMode,
+		WithVideo:    dg.mediaConf.WithVideo,
+		SecureRTPAlg: dg.mediaConf.SecureRTPAlg,
+	}
+
+	// Override WithVideo if specified for this call
+	if opts.WithVideo != nil {
+		mediaConf.WithVideo = *opts.WithVideo
 	}
 
 	// if opts.Codecs != nil {
