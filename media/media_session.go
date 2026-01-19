@@ -1185,8 +1185,8 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
 		"a=X-nat:0",
-		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		fmt.Sprintf("m=%s %d %s %s", mediaType, rtpPort, rtpProfile, strings.Join(fmts, " ")),
+		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 	}
 
 	s = append(s, formatsMap...)
@@ -1361,10 +1361,10 @@ func CombineSDP(sessions []*MediaSession) []byte {
 		if mediaConnIP == nil {
 			mediaConnIP = sess.Laddr.IP
 		}
+		s = append(s, fmt.Sprintf("m=%s %d %s %s", mediaType, sess.Laddr.Port, rtpProfile, strings.Join(fmts, " ")))
+
 		// Always add connection line for each media (required by RFC 4566)
 		s = append(s, fmt.Sprintf("c=IN IP4 %s", mediaConnIP))
-
-		s = append(s, fmt.Sprintf("m=%s %d %s %s", mediaType, sess.Laddr.Port, rtpProfile, strings.Join(fmts, " ")))
 
 		// Generate SDP for this session to get all attributes
 		sessSDP := sess.LocalSDP()
