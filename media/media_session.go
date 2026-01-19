@@ -1187,7 +1187,6 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 		"a=X-nat:0",
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		fmt.Sprintf("m=%s %d %s %s", mediaType, rtpPort, rtpProfile, strings.Join(fmts, " ")),
-		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 	}
 
 	s = append(s, formatsMap...)
