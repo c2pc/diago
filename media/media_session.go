@@ -1180,11 +1180,11 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 	s := []string{
 		"v=0",
 		fmt.Sprintf("o=- %d %d IN IP4 %s", ntpTime, ntpTime, originIP),
-		"s=pjmedia",
-		"b=AS:352",
+		"s=Sip Go Media",
+		//"b=AS:352",
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
-		"a=X-nat:0",
+		//"a=X-nat:0",
 		fmt.Sprintf("m=%s %d %s %s", mediaType, rtpPort, rtpProfile, strings.Join(fmts, " ")),
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 	}
@@ -1192,14 +1192,14 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 	s = append(s, formatsMap...)
 
 	// Add bandwidth (TIAS) for this media
-	if bandwidth > 0 {
-		s = append(s, fmt.Sprintf("b=TIAS:%d", bandwidth))
-	}
-
-	// Add RTCP port
-	if rtcpPort > 0 {
-		s = append(s, fmt.Sprintf("a=rtcp:%d IN IP4 %s", rtcpPort, connectionIP))
-	}
+	//if bandwidth > 0 {
+	//	s = append(s, fmt.Sprintf("b=TIAS:%d", bandwidth))
+	//}
+	//
+	//// Add RTCP port
+	//if rtcpPort > 0 {
+	//	s = append(s, fmt.Sprintf("a=rtcp:%d IN IP4 %s", rtcpPort, connectionIP))
+	//}
 
 	// Audio-specific attributes
 	if mediaType == "audio" {
@@ -1211,9 +1211,9 @@ func generateSDP(mediaType string, rtpProfile string, originIP net.IP, connectio
 	s = append(s, "a="+mode)
 
 	// Add SSRC and cname if provided
-	if ssrc > 0 && cname != "" {
-		s = append(s, fmt.Sprintf("a=ssrc:%d cname:%s", ssrc, cname))
-	}
+	//if ssrc > 0 && cname != "" {
+	//	s = append(s, fmt.Sprintf("a=ssrc:%d cname:%s", ssrc, cname))
+	//}
 
 	// Add RTCP feedback for video
 	if mediaType == "video" {
