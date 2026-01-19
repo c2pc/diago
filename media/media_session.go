@@ -1304,11 +1304,11 @@ func CombineSDP(sessions []*MediaSession) []byte {
 	s := []string{
 		"v=0",
 		fmt.Sprintf("o=- %d %d IN IP4 %s", ntpTime, ntpTime, originIP),
-		"s=pjmedia",
-		"b=AS:352",
+		"s=Sip Go Media",
+		//"b=AS:352",
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
-		"a=X-nat:0",
+		//"a=X-nat:0",
 	}
 	// Note: We don't add session-level connection line if it's the same as media-level
 
